@@ -1,0 +1,2 @@
+include LICENSE NOTICE.md VERSION
+recursive-include third_party *.txt
