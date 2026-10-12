@@ -7,6 +7,10 @@ with an optional **NAFNet-based 2.5D CT model**, selected with
 remain available. NAFNet requires a fresh training run; existing U-Net weights are
 incompatible.
 
+Training retains the paired L1/LCL objective and also logs **L2/MSE** and
+**SSIM loss (1 - SSIM)** for reference. The new metrics are saved in CSV and resume
+history and shown by the v3.3 history plots; checkpoint criteria are unchanged.
+
 The model uses learned neighboring-slice gates, NAFBlocks, a full-resolution
 detail branch, and a residual prediction of the center slice. It has **989,745
 parameters** at the supplied settings and supports 5, 7, or 9 slices. This is an

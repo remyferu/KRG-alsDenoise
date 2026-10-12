@@ -67,6 +67,36 @@ evaluation pass still uses random patches from the training dataset. No learning
 rate scheduler or separate held-out set has been added. Batch progress messages
 make long epochs visible in the log.
 
+### Reference L2 and SSIM losses
+
+Each epoch also reports `[Train]` and `[Val]` **L2 loss (mean squared error)** and
+**SSIM loss (1 - SSIM)**. These are detached reference measurements computed from
+the same paired predictions; they do not enter backpropagation, checkpoint
+selection, warmup or patience. Lower values indicate closer agreement with the
+noisy paired target, not proof of agreement with a clean reconstruction.
+
+New metrics average the two prediction directions. The existing L1/LCL log lines
+retain their original convention of summing those directions, so their scale is
+unchanged. Epoch summaries average the batch values from the final GPU rank,
+matching the scope of the existing logs. For 2.5D, both metrics compare the output
+with the opposite split's center slice. For 3D, MSE uses the whole patch and SSIM
+uses the center axial plane, as do the existing LCL/EDGE diagnostics.
+
+SSIM is evaluated in FP32 with an 11 × 11 Gaussian window, sigma 1.5, population
+covariance, and valid windows. It uses a fixed `train.ssim_data_range` measured
+in **normalized intensity units**. If absent, rank 0 computes the span from the
+minimum/maximum of both normalized training stacks once and saves it in the
+YAML. Resume reuses it. Set a positive range explicitly for controlled comparisons;
+different ranges change SSIM values. Inputs are neither clipped nor rescaled per
+batch, and SSIM loss is not a percentage.
+
+Each completed epoch updates `TrainOutput/results/reference_metrics.csv` (or the
+equivalent custom output directory), including the range and window settings.
+Reference history is retained in `resume.pth`. Resuming an older checkpoint starts
+reference history at the next epoch; past missing measurements are not invented.
+The v3.3 history cell also extracts the optional metrics into its CSV and adds two
+plot panels when they are present. Old L1/LCL-only logs still work.
+
 ## Infer and compare fine features
 
 ```bash

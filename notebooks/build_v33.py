@@ -127,6 +127,29 @@ synthetic TIFF inference tests are included; training tests are skipped by defau
 The full reconstruction pipeline and multi-GPU NERSC training have not been run
 as part of this integration. Scan quality and tiny-feature retention are unmeasured.
 ''')
+# Preserve old L1/LCL logs, adding optional reference columns and plot panels.
+edit('training-helpers', '(L1 loss|LCL loss|EDGE Value)',
+     '(L1 loss|LCL loss|EDGE Value|L2 loss|SSIM loss)')
+edit('training-helpers', "('Val','EDGE Value'):'edge'}", "('Val','EDGE Value'):'edge',\n             ('Train','L2 loss'):'train_l2', ('Val','L2 loss'):'eval_l2',\n             ('Train','SSIM loss'):'train_ssim', ('Val','SSIM loss'):'eval_ssim'}")
+edit('training-helpers', "            row.setdefault('edge', None)", "            row.setdefault('edge', None)\n            for key in ('train_l2','eval_l2','train_ssim','eval_ssim'):\n                row.setdefault(key, None)\n            row['ssim_data_range'] = metadata.get('ssim_data_range')")
+edit('training-helpers', "            mode = re.search(", "            metric_range = re.search(r'ssim_data_range=('+number+r')', line)\n            if metric_range:\n                metadata['ssim_data_range'] = float(metric_range[1])\n            mode = re.search(")
+edit('training-helpers', "('train_l1','eval_l1','train_lcl','eval_lcl')}",
+     "('train_l1','eval_l1','train_lcl','eval_lcl','train_l2','eval_l2','train_ssim','eval_ssim')}")
+edit('training-helpers', "['epoch','train_l1','eval_l1','train_lcl','eval_lcl','edge','warmup']",
+     "['epoch','train_l1','eval_l1','train_lcl','eval_lcl','edge','warmup',\n                'train_l2','eval_l2','train_ssim','eval_ssim','ssim_data_range']")
+edit('training-helpers', "        fig, axes = plt.subplots(2,1,figsize=(12,8.8),sharex=True)",
+     "        has_reference = any(np.isfinite(values[key]).any() for key in ('train_l2','eval_l2','train_ssim','eval_ssim'))\n        fig, axes = plt.subplots(4 if has_reference else 2,1,figsize=(12,15 if has_reference else 8.8),sharex=True)")
+edit('training-helpers', "            for ax, train_key, eval_key, title, ylabel, best in specifications:",
+     "            if has_reference:\n                specifications.extend([(axes[2],'train_l2','eval_l2','L2 / MSE (reference only)',\n                    'Epoch-average paired MSE',None),\n                    (axes[3],'train_ssim','eval_ssim','SSIM loss (reference only)',\n                    'Epoch-average paired 1 - SSIM',None)])\n            for ax, train_key, eval_key, title, ylabel, best in specifications:")
+edit('training-helpers', "            axes[1].set_xlabel('Epoch',labelpad=10)",
+     "            axes[-1].set_xlabel('Epoch',labelpad=10)")
+edit('training-helpers', "LCL is plotted with its logged weight.",
+     "LCL is plotted with its logged weight. L2/SSIM are reference metrics only.")
+edit('training-history-help', '## Training history',
+     '## Training history\n\nNew runs also log L2/MSE and SSIM loss for reference. The automatic plot adds\nreference panels when present; the CSV includes them and the fixed SSIM intensity\nrange. They do not affect optimization, checkpoints or patience. Older logs remain supported.')
+edit('source-review-validation', 'NAFNet is integrated',
+     'L2/MSE and SSIM loss are logged and saved for reference without changing the\nL1/LCL objective. SSIM uses a fixed normalized intensity span; 3D SSIM evaluates\nthe center axial plane.\n\nNAFNet is integrated')
+
 nb['metadata']['noise2inverse_workflow'].update(notebook_version='3.3',
     training_architecture='nafnet25d_optional', validation_status='code_and_inference_checks_only')
 for cell in nb['cells']:

@@ -19,6 +19,8 @@ from torch.utils.data import DataLoader
 
 from denoise.model_factory import build_model, model_spec, validate_checkpoint, forward_model
 from denoise.loss import LCL
+from denoise.reference_metrics import (SSIMLoss, resolve_ssim_data_range,
+                                       paired_reference_metrics, save_reference_history)
 from denoise.data import TomoDatasetTrain
 from denoise.data3d import TomoDataset3DTrain
 from denoise.utils import save2img
@@ -122,11 +124,28 @@ def run(args):
     else:
         ds_train = TomoDatasetTrain(params=params, config_file=args.config)
 
-    # Only rank 0 writes normalization stats
+    # Fix the reference SSIM intensity span for every batch/epoch and future resumes.
+    ssim_range_tensor = torch.zeros(1, dtype=torch.float64, device='cuda')
+    if rank == 0:
+        ssim_range_tensor.fill_(resolve_ssim_data_range(params['train'], ds_train))
+    torch.distributed.broadcast(ssim_range_tensor, src=0)
+    ssim_data_range = float(ssim_range_tensor.item())
+    reference_ssim = SSIMLoss(ssim_data_range).cuda()
+    log.info('Reference metrics only: L2=MSE, SSIM loss=1-SSIM; '
+             'ssim_data_range=%.12g; window=11; symmetric directional means' % ssim_data_range)
+    if mode == '3d':
+        log.info('Reference 3D MSE uses the full patch; SSIM uses its center axial plane.')
+
+    # Only rank 0 writes normalization and reference metric settings.
     if rank == 0:
         from denoise.data import save_normalization_value
         log.info("Saving training mean and std to config for inference")
         save_normalization_value(config_file=args.config, mean=ds_train.split0_mean, std=ds_train.split0_std)
+        with open(args.config) as stream:
+            saved_config = yaml.safe_load(stream)
+        saved_config['train']['ssim_data_range'] = ssim_data_range
+        with open(args.config, 'w') as stream:
+            yaml.safe_dump(saved_config, stream, sort_keys=False)
     torch.distributed.barrier()
 
     train_sampler = DistributedSampler(dataset=ds_train, shuffle=True, drop_last=True)
@@ -162,6 +181,7 @@ def run(args):
     train_loss, val_loss = [], []
     edge_values = []
     train_lcl_loss, val_lcl_loss = [], []
+    reference_metric_history = []
     best_val_loss, best_edge, best_lcl_loss = np.inf, 0, np.inf
     best_val_epoch, best_edge_epoch, best_lcl_epoch = 0, 0, 0
     epochs_since_improvement = 0
@@ -188,6 +208,7 @@ def run(args):
         train_lcl_loss  = ckpt['train_lcl_loss']
         val_lcl_loss    = ckpt['val_lcl_loss']
         edge_values     = ckpt['edge_values']
+        reference_metric_history = ckpt.get('reference_metric_history', [])
         continue_warmup = ckpt['continue_warmup']
         epochs_since_improvement = ckpt.get('epochs_since_improvement', 0)
         log.info("Resuming training from epoch %d (model_updates=%d)" % (start_epoch, model_updates))
@@ -207,6 +228,7 @@ def run(args):
     for epoch in range(start_epoch, params['train']['maxep'] + 1):
 
         step_losses, step_val_losses, step_lcl_loss, step_lcl_val_loss, step_edge_values = [], [], [], [], []
+        step_l2, step_val_l2, step_ssim, step_val_ssim = [], [], [], []
 
         tick_ep = time.time()
 
@@ -252,6 +274,11 @@ def run(args):
 
             step_losses.append((loss_view1 + loss_view2).detach().cpu().numpy())
             step_lcl_loss.append((loss_lcl1 + loss_lcl2).detach().cpu().numpy())
+            if rank == world_size - 1:
+                l2_reference, ssim_reference = paired_reference_metrics(
+                    pred_view1, pred_view2, X_mb_dev, Y_mb_dev, mode, center_idx, reference_ssim)
+                step_l2.append(l2_reference.item())
+                step_ssim.append(ssim_reference.item())
             model_updates += 1
             log_every = int(params['train'].get('log_every', 50))
             if rank == world_size - 1 and log_every > 0 and (
@@ -290,6 +317,11 @@ def run(args):
                 step_val_losses.append(loss.detach().cpu().numpy())
                 loss_lcl = loss_lcl1 + loss_lcl2
                 step_lcl_val_loss.append(loss_lcl.cpu().numpy())
+                if rank == world_size - 1:
+                    l2_reference, ssim_reference = paired_reference_metrics(
+                        pred_view1, pred_view2, X_mb_dev, Y_mb_dev, mode, center_idx, reference_ssim)
+                    step_val_l2.append(l2_reference.item())
+                    step_val_ssim.append(ssim_reference.item())
 
         ep_time = time.time() - tick_ep
 
@@ -322,6 +354,20 @@ def run(args):
             np.mean(step_lcl_val_loss), step_lcl_val_loss[0], step_lcl_val_loss[-1], ep_time))
         log.info('[Val] EDGE Value:   %.4f, %.4f => %.4f, rate: %.2fs/ep' % (
             np.mean(step_edge_values), step_edge_values[0], step_edge_values[-1], ep_time))
+        log.info('[Train] L2 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
+            np.mean(step_l2), step_l2[0], step_l2[-1], ep_time))
+        log.info('[Train] SSIM loss:  %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
+            np.mean(step_ssim), step_ssim[0], step_ssim[-1], ep_time))
+        log.info('[Val]   L2 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
+            np.mean(step_val_l2), step_val_l2[0], step_val_l2[-1], ep_time))
+        log.info('[Val]   SSIM loss:  %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
+            np.mean(step_val_ssim), step_val_ssim[0], step_val_ssim[-1], ep_time))
+
+        reference_metric_history.append(dict(epoch=epoch, train_l2=float(np.mean(step_l2)),
+            eval_l2=float(np.mean(step_val_l2)), train_ssim=float(np.mean(step_ssim)),
+            eval_ssim=float(np.mean(step_val_ssim)), ssim_data_range=ssim_data_range,
+            ssim_window_size=11, mode=mode))
+        save_reference_history(os.path.join(odir, 'results', 'reference_metrics.csv'), reference_metric_history)
 
         train_loss.append(np.mean(step_losses))
         val_loss.append(np.mean(step_val_losses))
@@ -442,6 +488,7 @@ def run(args):
             'train_lcl_loss': train_lcl_loss,
             'val_lcl_loss': val_lcl_loss,
             'edge_values': edge_values,
+            'reference_metric_history': reference_metric_history,
             'continue_warmup': continue_warmup,
             'epochs_since_improvement': epochs_since_improvement,
         }, f"{odir}/resume.pth")

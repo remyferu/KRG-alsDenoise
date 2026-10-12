@@ -23,6 +23,10 @@ normalization at borders, explicit output paths and preserved thread settings.
 Training and volume inference reject existing output directories rather than
 deleting them. CLI formatting and logging paths also carry local portability fixes.
 
+Reference metrics add detached symmetric MSE and SSIM measurements, CSV/resume
+history, and optional notebook plot panels. They preserve the L1/LCL objective
+and existing checkpoint/early-stopping criteria.
+
 The HPC notebook derives from the user's Noise2Inverse360 workflow v3.2. It retains
 native Vo centering, queues, linked zoom displays, live log output, and automatic
 loss-history plots, with NAFNet configuration added in v3.3.
