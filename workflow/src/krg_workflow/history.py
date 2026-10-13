@@ -150,7 +150,7 @@ def parse_training_history(log_path):
 
 
 def plot_training_history(log_path, output_dir=None, moving_window=10, show=True, outcome=None):
-    """Export semilog loss curves and record lows after warmup."""
+    """Export linear loss curves and record lows after warmup."""
     if type(moving_window) is not int or moving_window < 1:
         raise ValueError('moving_window must be a positive integer.')
     history = parse_training_history(log_path)
@@ -177,11 +177,11 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
     best_l1 = record_lows['eval_l1'][-1] if record_lows['eval_l1'] else None
     best_lcl = record_lows['eval_lcl'][-1] if record_lows['eval_lcl'] else None
 
-    def positive(array):
-        return np.where(np.isfinite(array) & (array > 0), array, np.nan)
+    def plottable(array):
+        return np.where(np.isfinite(array), array, np.nan)
 
     def mark_records(ax, key, color):
-        points = [p for p in record_lows[key] if p['value'] > 0]
+        points = record_lows[key]
         if points:
             ax.scatter([p['epoch'] for p in points], [p['value'] for p in points],
                        s=24, color=color, edgecolors='white', linewidths=.5, zorder=6)
@@ -231,30 +231,31 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                     ax.axvspan(epochs[0], epochs[-1], color='#ccd5df', alpha=0.25, zorder=0)
                 for label, key in (('Training', train_key), ('Evaluation', eval_key)):
                     averaged = smooth(values[key])
-                    has_average = np.isfinite(positive(averaged)).any()
-                    ax.plot(epochs, positive(values[key]), color=colors[label], alpha=0.22 if has_average else 0.8, linewidth=0.8, label=None if has_average else label, zorder=2)
+                    has_average = np.isfinite(plottable(averaged)).any()
+                    ax.plot(epochs, plottable(values[key]), color=colors[label], alpha=0.22 if has_average else 0.8, linewidth=0.8, label=None if has_average else label, zorder=2)
                     if has_average:
-                        ax.plot(epochs, positive(averaged), color=colors[label], linewidth=2.2, label=label, zorder=3)
+                        ax.plot(epochs, plottable(averaged), color=colors[label], linewidth=2.2, label=label, zorder=3)
                     mark_records(ax, key, colors[label])
                 if eval_key == 'eval_total' and np.isfinite(values['early_stop_mean']).any():
-                    ax.plot(epochs, positive(values['early_stop_mean']), color='#243447', linestyle='--',
+                    ax.plot(epochs, plottable(values['early_stop_mean']), color='#243447', linestyle='--',
                             linewidth=1.7, label='Stopping monitor (logged)', zorder=4)
                     mark_records(ax, 'early_stop_mean', '#243447')
                 if eval_key == 'eval_total' and np.isfinite(values['ema_total']).any():
                     available = np.isfinite(values['ema_total'])
-                    ax.plot(epochs[available], positive(values['ema_total'][available]), color=colors['EMA'],
+                    ax.plot(epochs[available], plottable(values['ema_total'][available]), color=colors['EMA'],
                             linewidth=2.2, marker=None, label='EMA weights (raw evaluation)', zorder=7)
                 ax.set_title(title, loc='left', fontweight='bold', fontsize=14, pad=12)
                 ax.set_ylabel(ylabel)
                 plotted_keys = (train_key, eval_key, 'early_stop_mean', 'ema_total') if eval_key == 'eval_total' else (train_key, eval_key)
-                if not any(np.isfinite(positive(values[key])).any() for key in plotted_keys):
-                    ax.set_ylim(1e-8, 1)
-                    ax.text(1.025, .15, 'No positive loss values', transform=ax.transAxes,
+                if not any(np.isfinite(plottable(values[key])).any() for key in plotted_keys):
+                    ax.set_ylim(0, 1)
+                    ax.text(1.025, .15, 'No loss values available', transform=ax.transAxes,
                             va='top', color='#687889', fontsize=10)
                 ax.set_xscale('linear')
                 ax.xaxis.set_major_locator(MaxNLocator(integer=True))
                 ax.xaxis.set_minor_locator(AutoMinorLocator(2))
-                ax.set_yscale('log', nonpositive='mask')
+                ax.set_yscale('linear')
+                ax.yaxis.set_minor_locator(AutoMinorLocator(2))
                 ax.grid(which='major', axis='both', color='#dce3ea', linewidth=0.7)
                 ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=0.4)
                 ax.set_xlim(epochs[0] - .5, epochs[-1] + .5)
@@ -265,8 +266,6 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                     label = 'Lowest evaluation L1' if train_key == 'train_l1' else 'Lowest evaluation LCL'
                     note = f"{label}\nAfter warmup: {best['value']:.6f}\nEpoch {best['epoch']}"
                     box = dict(boxstyle='round,pad=.5', facecolor='white', edgecolor='#e4e8ed')
-                    if best['value'] <= 0:
-                        note += '\nNonpositive; omitted'
                     ax.text(1.025, .58, note, transform=ax.transAxes, fontsize=10,
                             va='top', bbox=box, zorder=8)
             if metadata['warmup_end'] is not None:
@@ -275,8 +274,9 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
             if has_lr:
                 ax = axes[-1]
                 available = np.isfinite(values['learning_rate'])
-                ax.step(epochs[available], positive(values['learning_rate'][available]), where='post', color='#2166ac', linewidth=2)
-                ax.set_yscale('log', nonpositive='mask')
+                ax.step(epochs[available], plottable(values['learning_rate'][available]), where='post', color='#2166ac', linewidth=2)
+                ax.set_yscale('linear')
+                ax.yaxis.set_minor_locator(AutoMinorLocator(2))
                 ax.set_title('Learning rate', loc='left', fontweight='bold', fontsize=14, pad=12)
                 ax.set_ylabel('Adam learning rate')
                 ax.grid(which='major', axis='both', color='#dce3ea', linewidth=.7)
@@ -285,7 +285,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
             record_note = ('Dots: successive record lows after warmup; EMA is line-only.'
                            if any(row['warmup_epoch'] is not None for row in rows) else
                            'Warmup status unavailable; record-low markers omitted.')
-            fig.text(0.08, 0.073, record_note+' Log loss axes omit nonpositive values.', fontsize=10, color='#596b7d')
+            fig.text(0.08, 0.073, record_note, fontsize=10, color='#596b7d')
             curve_note = f'Faint: raw epochs. Solid: trailing {moving_window}-epoch display averages.'
             if has_total and np.isfinite(values['early_stop_mean']).any():
                 curve_note += ' Dashed: logged stopping monitor.'

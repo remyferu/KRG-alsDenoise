@@ -79,7 +79,7 @@ class HistoryPlottingTests(unittest.TestCase):
                 dict(epoch=5, warmup_epoch=False, eval_l2=1)]
         self.assertEqual(history.record_low_losses(rows)['eval_l2'], [dict(epoch=2, value=2), dict(epoch=4, value=0)])
 
-    def test_semilog_axes_grids_and_marker_coordinates_match_raw_epoch_records(self):
+    def test_linear_axes_grids_and_marker_coordinates_match_raw_epoch_records(self):
         figures = []
         close = history.plt.close
 
@@ -102,7 +102,7 @@ class HistoryPlottingTests(unittest.TestCase):
             self.assertEqual(len(axes), 6)
             for ax in axes:
                 self.assertEqual(ax.get_xscale(), 'linear')
-                self.assertEqual(ax.get_yscale(), 'log')
+                self.assertEqual(ax.get_yscale(), 'linear')
                 self.assertGreater(ax.get_xlim()[0], 0)
                 for axis in (ax.xaxis, ax.yaxis):
                     self.assertTrue(all(t.gridline.get_visible() for t in axis.get_major_ticks()))
@@ -130,7 +130,7 @@ class HistoryPlottingTests(unittest.TestCase):
             self.assertTrue(Path(result['paths']['png']).is_file())
             self.assertTrue(Path(result['paths']['svg']).is_file())
 
-    def test_zero_losses_stay_in_exports_and_create_no_invalid_log_points(self):
+    def test_zero_losses_are_visible_in_curves_markers_and_exports(self):
         figures = []
         close = history.plt.close
 
@@ -148,7 +148,10 @@ class HistoryPlottingTests(unittest.TestCase):
             self.assertFalse(any('log' in str(w.message).lower() for w in caught))
             self.assertEqual(result['record_lows']['eval_lcl'], [dict(epoch=1, value=0)])
             for ax in figures[0].axes:
-                self.assertFalse(ax.collections)
+                self.assertEqual(len(ax.collections), 2)
+                for points in ax.collections:
+                    np.testing.assert_array_equal(points.get_offsets(), [[1, 0]])
+                self.assertEqual(ax.get_yscale(), 'linear')
             self.assertIn(',0.0,', Path(result['paths']['csv']).read_text())
 
 
