@@ -13,6 +13,25 @@ import io
 from datetime import datetime, timezone
 
 
+LOSS_KEYS = ('train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'train_l2', 'eval_l2',
+             'train_ssim', 'eval_ssim', 'train_total', 'eval_total', 'early_stop_mean', 'ema_total')
+
+
+def record_low_losses(rows):
+    """Track strict raw-loss improvements using fully post-warmup epochs."""
+    records = {key: [] for key in LOSS_KEYS}
+    best = {key: float('inf') for key in LOSS_KEYS}
+    for row in rows:
+        if row.get('warmup_epoch') is not False:
+            continue
+        for key in LOSS_KEYS:
+            value = row.get(key)
+            if value is not None and np.isfinite(value) and value < best[key]:
+                best[key] = value
+                records[key].append(dict(epoch=row['epoch'], value=value))
+    return records
+
+
 def parse_training_history(log_path):
     """Read epoch means; retain the latest complete record for resumed epochs."""
     path = Path(log_path)
@@ -37,6 +56,7 @@ def parse_training_history(log_path):
                 metadata['duplicate_epochs'].append(current['epoch'])
             row = dict(current)
             row.setdefault('warmup', None)
+            row.setdefault('warmup_epoch', None)
             row.setdefault('edge', None)
             for key in ('train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'train_total', 'eval_total',
                         'early_stop_mean', 'ema_total', 'learning_rate', 'lr_reduced'):
@@ -86,6 +106,12 @@ def parse_training_history(log_path):
                 monitor = re.search('\\[EarlyStopping\\] mean total loss:\\s*(' + number + ')', line)
                 if monitor:
                     current['early_stop_mean'] = float(monitor[1])
+                    current.setdefault('warmup_epoch', False)
+                collecting = re.search('Collecting post-warmup epochs:\\s*(\\d+)/', line)
+                if collecting:
+                    current.setdefault('warmup_epoch', int(collecting[1]) == 0)
+                if 'Waiting for warmup to finish.' in line:
+                    current.setdefault('warmup_epoch', True)
                 ema = re.search('\\[EMA\\] Total loss:\\s*(' + number + ')', line)
                 if ema:
                     current['ema_total'] = float(ema[1])
@@ -95,6 +121,9 @@ def parse_training_history(log_path):
                 warmup = re.search('Is model warming up\\?:\\s*(True|False)', line)
                 if warmup:
                     current['warmup'] = warmup[1] == 'True'
+                warmup_epoch = re.search('Epoch includes warmup updates:\\s*(True|False)', line)
+                if warmup_epoch:
+                    current['warmup_epoch'] = warmup_epoch[1] == 'True'
             for key, label in (('best_l1', 'Lowest model validation loss'), ('best_lcl', 'Lowest model LCL loss')):
                 best = re.search(label + '\\s+(' + number + ')\\s+at epoch\\s+(\\d+)', line)
                 if best and int(best[2]) > 0:
@@ -103,12 +132,24 @@ def parse_training_history(log_path):
                 metadata['stop_reason'] = 'early stopping'
     commit()
     rows = [records[key] for key in sorted(records)]
-    metadata['warmup_end'] = next((row['epoch'] for row in rows if row['warmup'] is False), None) if any((row['warmup'] is True for row in rows)) else None
+    previous_warmup = None
+    for row in rows:
+        if row['warmup_epoch'] is None:
+            if row['warmup'] is True:
+                row['warmup_epoch'] = True
+            elif row['warmup'] is False:
+                # Older logs report the end-of-epoch state, including the transition.
+                row['warmup_epoch'] = previous_warmup is True
+        if row['warmup'] is not None:
+            previous_warmup = row['warmup']
+    warm_epochs = [row['epoch'] for row in rows if row['warmup_epoch'] is True]
+    warmup_finished = any(row['warmup'] is False or row['warmup_epoch'] is False for row in rows)
+    metadata['warmup_end'] = max(warm_epochs) if warm_epochs and warmup_finished else None
     return dict(rows=rows, metadata=metadata, log_path=str(path))
 
 
 def plot_training_history(log_path, output_dir=None, moving_window=10, show=True, outcome=None):
-    """Export raw and smoothed loss curves, including total loss when logged."""
+    """Export log-log loss curves and record lows after warmup."""
     if type(moving_window) is not int or moving_window < 1:
         raise ValueError('moving_window must be a positive integer.')
     history = parse_training_history(log_path)
@@ -131,25 +172,24 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
             result[moving_window - 1:] = np.convolve(array, np.ones(moving_window) / moving_window, mode='valid')
         return result
 
-    def best_record(key, metric):
-        tracked = metadata[key]
-        if tracked is not None:
-            return tracked
-        candidates = rows
-        if key == 'best_lcl' and metadata['warmup_end'] is not None:
-            candidates = [row for row in rows if row['epoch'] > metadata['warmup_end']]
-        if not candidates:
-            return None
-        row = min(candidates, key=lambda item: item[metric])
-        return dict(epoch=row['epoch'], value=row[metric])
-    best_l1 = best_record('best_l1', 'eval_l1')
-    best_lcl = best_record('best_lcl', 'eval_lcl')
+    record_lows = record_low_losses(rows)
+    best_l1 = record_lows['eval_l1'][-1] if record_lows['eval_l1'] else None
+    best_lcl = record_lows['eval_lcl'][-1] if record_lows['eval_lcl'] else None
+
+    def positive(array):
+        return np.where(np.isfinite(array) & (array > 0), array, np.nan)
+
+    def mark_records(ax, key, color):
+        points = [p for p in record_lows[key] if p['epoch'] > 0 and p['value'] > 0]
+        if points:
+            ax.scatter([p['epoch'] for p in points], [p['value'] for p in points],
+                       s=24, color=color, edgecolors='white', linewidths=.5, zorder=6)
     paths = {name: folder / ('training_loss_history.' + name) for name in ('png', 'svg')}
     paths['csv'] = folder / 'training_history.csv'
     temp_csv = folder / ('.training_history.' + uuid.uuid4().hex + '.tmp')
     try:
         with temp_csv.open('w', newline='', encoding='utf-8') as stream:
-            writer = csv.DictWriter(stream, fieldnames=['epoch', 'train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'edge', 'warmup', 'train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'ssim_data_range', 'train_total', 'eval_total', 'early_stop_mean', 'ema_total', 'learning_rate', 'lr_reduced'])
+            writer = csv.DictWriter(stream, fieldnames=['epoch', 'train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'edge', 'warmup', 'warmup_epoch', 'train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'ssim_data_range', 'train_total', 'eval_total', 'early_stop_mean', 'ema_total', 'learning_rate', 'lr_reduced'])
             writer.writeheader()
             writer.writerows(rows)
         temp_csv.replace(paths['csv'])
@@ -186,47 +226,65 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                 if end is not None:
                     ax.axvspan(epochs[0], end, color='#ccd5df', alpha=0.25, zorder=0)
                     ax.axvline(end, color='#778798', linewidth=1, linestyle='--', zorder=1)
+                elif any(row['warmup_epoch'] is True for row in rows):
+                    ax.axvspan(epochs[0], epochs[-1], color='#ccd5df', alpha=0.25, zorder=0)
                 for label, key in (('Training', train_key), ('Evaluation', eval_key)):
                     averaged = smooth(values[key])
-                    has_average = np.isfinite(averaged).any()
-                    ax.plot(epochs, values[key], color=colors[label], alpha=0.22 if has_average else 0.8, linewidth=0.8, marker='.' if len(rows) == 1 else None, label=None if has_average else label, zorder=2)
+                    has_average = np.isfinite(positive(averaged)).any()
+                    ax.plot(epochs, positive(values[key]), color=colors[label], alpha=0.22 if has_average else 0.8, linewidth=0.8, label=None if has_average else label, zorder=2)
                     if has_average:
-                        ax.plot(epochs, averaged, color=colors[label], linewidth=2.2, label=label, zorder=3)
+                        ax.plot(epochs, positive(averaged), color=colors[label], linewidth=2.2, label=label, zorder=3)
+                    mark_records(ax, key, colors[label])
                 if eval_key == 'eval_total' and np.isfinite(values['early_stop_mean']).any():
-                    ax.plot(epochs, values['early_stop_mean'], color='#243447', linestyle='--',
+                    ax.plot(epochs, positive(values['early_stop_mean']), color='#243447', linestyle='--',
                             linewidth=1.7, label='Stopping monitor (logged)', zorder=4)
+                    mark_records(ax, 'early_stop_mean', '#243447')
                 if eval_key == 'eval_total' and np.isfinite(values['ema_total']).any():
                     available = np.isfinite(values['ema_total'])
-                    ax.plot(epochs[available], values['ema_total'][available], color='#7953a6',
-                            linewidth=1.7, marker='.', label='EMA weights (raw evaluation)', zorder=4)
+                    ax.plot(epochs[available], positive(values['ema_total'][available]), color='#7953a6',
+                            linewidth=1.7, label='EMA weights (raw evaluation)', zorder=4)
+                    mark_records(ax, 'ema_total', '#7953a6')
                 ax.set_title(title, loc='left', fontweight='bold', fontsize=14, pad=12)
                 ax.set_ylabel(ylabel)
-                ax.grid(axis='y', color='#dce3ea', linewidth=0.7)
-                ax.set_xlim(epochs[0] - 0.5, epochs[-1] + 0.5)
+                plotted_keys = (train_key, eval_key, 'early_stop_mean', 'ema_total') if eval_key == 'eval_total' else (train_key, eval_key)
+                if not any(np.isfinite(positive(values[key])).any() for key in plotted_keys):
+                    ax.set_ylim(1e-8, 1)
+                    ax.text(.5, .5, 'No positive loss values', transform=ax.transAxes,
+                            ha='center', color='#687889', fontsize=10)
+                ax.set_xscale('log', nonpositive='mask')
+                ax.set_yscale('log', nonpositive='mask')
+                ax.grid(which='major', axis='both', color='#dce3ea', linewidth=0.7)
+                ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=0.4)
+                positive_epochs = epochs[epochs > 0]
+                ax.set_xlim(positive_epochs[0] / 1.15 if len(positive_epochs) else 1,
+                            positive_epochs[-1] * 1.15 if len(positive_epochs) else 10)
                 ax.tick_params(axis='both', length=0, pad=7)
                 ax.legend(loc='upper right', frameon=False, ncol=2)
                 if best is not None:
-                    label = 'Best evaluation L1' if train_key == 'train_l1' else 'Best tracked evaluation LCL'
+                    label = 'Lowest post-warmup evaluation L1' if train_key == 'train_l1' else 'Lowest post-warmup evaluation LCL'
                     note = f"{label}: {best['value']:.6f}\nEpoch {best['epoch']}"
                     position = (0.03, 0.12) if train_key == 'train_l1' else (0.14, 0.72)
                     box = dict(boxstyle='round,pad=.5', facecolor='white', edgecolor='#e4e8ed')
-                    if epochs[0] <= best['epoch'] <= epochs[-1]:
-                        ax.scatter(best['epoch'], best['value'], marker='*', s=155, color=colors['Evaluation'], edgecolors='white', linewidth=0.8, zorder=5)
+                    if best['epoch'] > 0 and best['value'] > 0:
                         ax.annotate(note, xy=(best['epoch'], best['value']), xytext=position, textcoords='axes fraction', fontsize=10, bbox=box, arrowprops=dict(arrowstyle='-', color='#a7b2be', linewidth=1))
                     else:
-                        ax.text(*position, note + ' (earlier history)', transform=ax.transAxes, fontsize=10, bbox=box)
+                        ax.text(*position, note + ' (outside log axes)', transform=ax.transAxes, fontsize=10, bbox=box)
             if metadata['warmup_end'] is not None:
                 axes[0].text(metadata['warmup_end'] + 5, 0.88, 'LCL warmup ended', transform=axes[0].get_xaxis_transform(), fontsize=9, color='#687889')
             if has_lr:
                 ax = axes[-1]
                 available = np.isfinite(values['learning_rate'])
-                ax.step(epochs[available], values['learning_rate'][available], where='post', color='#2166ac', linewidth=2)
-                if (values['learning_rate'][available] > 0).all():
-                    ax.set_yscale('log')
+                ax.step(epochs[available], positive(values['learning_rate'][available]), where='post', color='#2166ac', linewidth=2)
+                ax.set_yscale('log', nonpositive='mask')
                 ax.set_title('Learning rate', loc='left', fontweight='bold', fontsize=14, pad=12)
                 ax.set_ylabel('Adam learning rate')
-                ax.grid(axis='y', color='#dce3ea', linewidth=.7)
-            axes[-1].set_xlabel('Epoch', labelpad=10)
+                ax.grid(which='major', axis='both', color='#dce3ea', linewidth=.7)
+                ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=.4)
+            axes[-1].set_xlabel('Epoch (log scale)', labelpad=10)
+            record_note = ('Dots: successive record lows after warmup.'
+                           if any(row['warmup_epoch'] is not None for row in rows) else
+                           'Warmup status unavailable; record-low markers omitted.')
+            fig.text(0.08, 0.073, record_note+' Log axes omit nonpositive values.', fontsize=10, color='#596b7d')
             curve_note = f'Faint: raw epochs. Solid: trailing {moving_window}-epoch display averages.'
             if has_total and np.isfinite(values['early_stop_mean']).any():
                 curve_note += ' Dashed: logged stopping monitor.'
@@ -250,7 +308,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
         finally:
             plt.close(fig)
     print('DONE: saved training history:', paths['png'])
-    return dict(status='saved', epochs=len(rows), first_epoch=int(epochs[0]), last_epoch=int(epochs[-1]), best_l1=best_l1, best_lcl=best_lcl, metadata=metadata, paths={key: str(value) for key, value in paths.items()})
+    return dict(status='saved', epochs=len(rows), first_epoch=int(epochs[0]), last_epoch=int(epochs[-1]), best_l1=best_l1, best_lcl=best_lcl, record_lows=record_lows, metadata=metadata, paths={key: str(value) for key, value in paths.items()})
 
 
 def snapshot_training_history(log_path, output_root=None, moving_window=10, show=True):

@@ -431,6 +431,7 @@ def run(args):
         log.info('Highest model EDGE score %.6f at epoch %d' % (best_edge, best_edge_epoch))
         log.info('Number of model updates: %s' % f"{model_updates:,}")
         log.info('Is model warming up?: %s' % continue_warmup)
+        log.info('Epoch includes warmup updates: %s' % warming_epoch)
         if stopping.current_mean is not None:
             patience_status = ('%d/%d' % (stopping.epochs_since_improvement, patience)
                                if patience > 0 else '%d (stopping disabled)' % stopping.epochs_since_improvement)
