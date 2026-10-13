@@ -1,5 +1,10 @@
 # NAFNet for ALS micro-CT
 
+The [architecture diagram](figures/README.md) shows the full 2.5D data flow,
+axial fusion gates, NAFBlock operations and paired training objective. SVG and
+PNG exports include default tensor dimensions and parameter counts; a local
+HTML viewer supports zoom and pan.
+
 ## Install on NERSC
 
 Follow [NERSC setup](SETUP_NERSC.md) for environment installation, kernel

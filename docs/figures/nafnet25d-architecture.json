@@ -1,0 +1,138 @@
+{
+  "source": "denoise/nafnet25d.py",
+  "source_sha256": "c0431bc2f2d2b34e7db6c6181a75cccb30c6d4218ea485cd9da490f2bfefba8b",
+  "parameters": 989745,
+  "module_parameters": {
+    "stem": 160,
+    "neighbor_gate": 1264,
+    "fuse": 1056,
+    "detail": 32896,
+    "enc0": 16448,
+    "down0": 8256,
+    "enc1": 61568,
+    "down1": 32896,
+    "middle": 713472,
+    "up1": 33024,
+    "dec1": 61568,
+    "up0": 8320,
+    "dec0": 16448,
+    "head": 2369
+  },
+  "default_options": {
+    "n_slices": 5,
+    "width": 32,
+    "stem_width": 16,
+    "detail_blocks": 4,
+    "encoder_blocks": [
+      2,
+      2
+    ],
+    "middle_blocks": 6,
+    "decoder_blocks": [
+      2,
+      2
+    ]
+  },
+  "default_module_output_shapes": {
+    "stem": [
+      20,
+      16,
+      256,
+      256
+    ],
+    "neighbor_gate": [
+      4,
+      16,
+      256,
+      256
+    ],
+    "fuse": [
+      4,
+      32,
+      256,
+      256
+    ],
+    "detail": [
+      4,
+      32,
+      256,
+      256
+    ],
+    "enc0": [
+      4,
+      32,
+      256,
+      256
+    ],
+    "down0": [
+      4,
+      64,
+      128,
+      128
+    ],
+    "enc1": [
+      4,
+      64,
+      128,
+      128
+    ],
+    "down1": [
+      4,
+      128,
+      64,
+      64
+    ],
+    "middle": [
+      4,
+      128,
+      64,
+      64
+    ],
+    "up1": [
+      4,
+      64,
+      128,
+      128
+    ],
+    "dec1": [
+      4,
+      64,
+      128,
+      128
+    ],
+    "up0": [
+      4,
+      32,
+      256,
+      256
+    ],
+    "dec0": [
+      4,
+      32,
+      256,
+      256
+    ],
+    "head": [
+      4,
+      1,
+      256,
+      256
+    ]
+  },
+  "shape_check": {
+    "input": [
+      2,
+      5,
+      255,
+      257
+    ],
+    "output": [
+      2,
+      1,
+      255,
+      257
+    ],
+    "device": "meta"
+  },
+  "verification": "Parameter inspection and shape propagation only; no model training."
+}
