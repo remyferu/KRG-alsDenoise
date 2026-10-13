@@ -4,6 +4,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def paired_objective(loss_view1, loss_view2, loss_lcl1=0.0, loss_lcl2=0.0):
+    """Combine paired data losses and already-weighted regularizers.
+
+    Training and evaluation use this same objective for optimization and
+    early stopping. Reference MSE/SSIM measurements remain separate.
+    """
+    return 0.5 * (loss_view1 + loss_view2) + 0.5 * (loss_lcl1 + loss_lcl2)
+
+
 def laplacian_batch(x):
     # x: [B, C, H, W] (assumes grayscale: C=1)
     kernel = torch.tensor([[0, 1, 0],

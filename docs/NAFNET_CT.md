@@ -62,10 +62,42 @@ NAFNet architecture. New checkpoints include their architecture, slice count and
 model options; all three commands check those against the config.
 
 Training uses symmetric paired L1, with weighted LCL added after warmup.
-Patience counts eligible epochs without lower raw evaluation L1, using the
-final GPU rank’s metrics. Evaluation samples random patches from the training
-dataset rather than a held-out set. The learning rate is constant; history
-smoothing does not affect early stopping. Batch progress is written to the log.
+Early stopping monitors a trailing average of evaluation total loss, using the
+same `paired_objective()` as optimization. The current total is half the sum
+of paired L1 losses plus half the sum of already-weighted LCL terms. LCL has
+weight 0.01 after warmup; MSE and SSIM remain reference measurements.
+
+```yaml
+train:
+  patience: 100
+  early_stopping_window: 10
+  min_delta: 0.001
+```
+
+Warmup and its transition epoch are excluded. The first complete post-warmup
+window establishes a baseline. Later windows must improve on the best qualifying
+mean by more than `min_delta` to reset patience. The threshold is absolute, in
+total-objective units, and should be chosen for the loss scale. Smaller changes
+can accumulate until they cross the threshold because the baseline stays fixed.
+`patience: 0` disables stopping. CLI-generated configurations retain that default;
+the notebook preset uses 100.
+
+The raw L1, LCL and EDGE checkpoints retain their original selection criteria.
+Monitor history, best qualifying mean, epoch and patience counter are saved in
+`resume.pth`. Resuming with the same window and threshold restores the monitor
+exactly; changing either starts a fresh window. Older checkpoints also start a
+fresh window because they do not identify eligible post-warmup history. Existing
+YAML without the new fields uses window 10 and `min_delta=0.001`.
+
+The `[EarlyStopping]` log reports collection progress or the monitored mean and
+patience count. History exports include training/evaluation total loss and the
+logged monitor curve. `MOVING_AVERAGE_EPOCHS` changes display smoothing only;
+`train.early_stopping_window` controls stopping.
+
+Evaluation still samples the training dataset and uses the final GPU rank’s
+metrics. The learning rate remains constant. Future objective changes belong
+in the shared loss assembly so optimization and evaluation monitor the same
+quantity; reporting metrics do not enter the monitor.
 
 ### Reference L2 and SSIM losses
 

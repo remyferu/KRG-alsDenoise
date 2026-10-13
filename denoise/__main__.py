@@ -87,6 +87,7 @@ def make_config(args):
         'psz': 256, 'n_slices': 5, 'mbsz': 32,
         'psz_3d': 96, 'nb_patches_3d': 17600, 'n_blocks_3d': 4, 'start_filts_3d': 56,
         'lr': 0.001, 'warmup': 2000, 'maxep': 2000, 'patience': 0,
+        'early_stopping_window': 10, 'min_delta': 0.001,
     }
 
     config = {

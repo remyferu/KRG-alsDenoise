@@ -10,6 +10,9 @@ train:
   lr: 0.001
   warmup: 2000
   maxep: 2000
+  patience: 0  # Set a positive count to enable early stopping
+  early_stopping_window: 10
+  min_delta: 0.001  # Absolute improvement in mean evaluation total loss
 infer:
   overlap: 0.5
   window: "cosine"

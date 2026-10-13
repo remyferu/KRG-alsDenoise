@@ -45,6 +45,10 @@ Training uses paired L1 and LCL. MSE and SSIM loss are recorded for reference
 without affecting optimization or checkpoint selection. History plots include
 these metrics when present.
 
+Early stopping uses a trailing 10-epoch average of evaluation total loss after
+warmup, with an absolute improvement threshold of 0.001. Window, threshold and
+patience are configurable; raw-score checkpoints remain available.
+
 Default settings use five slices, 256-pixel patches, batch 4 per GPU and BF16.
 They require evaluation for each dataset. Preservation of 2–5 pixel features
 has not been established. Each GPU rank loads both TIFF stacks into host RAM;

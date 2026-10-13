@@ -56,14 +56,18 @@ and settings identity cannot be changed under the same run label.
 
 Backend configuration, checkpoint loading and dataset/loader construction are
 in `denoise/configuration.py`, `checkpoints.py` and `training_setup.py`.
-The v3.4 extraction preserves the epoch loop, losses, optimizer, warmup,
-checkpoint selection and early stopping.
+Optimization losses, optimizer, warmup and raw checkpoint selection retain
+their original behavior. `denoise/early_stopping.py` separately monitors the
+post-warmup moving average of evaluation total loss. Its state is saved in the
+resume checkpoint. Training and evaluation share `paired_objective()` from
+`denoise/loss.py`; reporting metrics do not control stopping.
 
 ## Compatibility
 
 - Schema-4 plans from v3.0–v3.4 retain their geometry, output names and identity.
 - Queue schema 1, entry IDs, stage signatures, completion files and lock names are unchanged.
 - Existing training YAML, normalization, checkpoints and metric history remain readable.
+  Legacy resume checkpoints start a fresh early-stopping window; new ones restore it.
 - Cleanup previews include the generated `auto_cor_vo` directory.
 
 ## Terminal commands
@@ -98,7 +102,9 @@ The full suite requires backend dependencies. For workflow checks alone, use
 `workflow/tests` as the discovery directory. Tests cover temporary scans and
 TIFFs, log parsing, mocked subprocess/ALS calls and inference. Training tests
 are disabled by default. Python 3.8 compatibility is checked statically.
-Local checks do not verify a fresh NERSC installation or ALS reconstruction.
+Stopping-policy tests use scalar loss sequences, serialized monitor state and
+mocked distributed decisions without training a model. Local checks do not
+verify a fresh NERSC installation or ALS reconstruction.
 
 Historical documentation and environment exports are under `docs/legacy/`
 and `envs/legacy/`. See [license notices](../NOTICE.md) for attribution.

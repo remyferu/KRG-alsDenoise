@@ -46,6 +46,11 @@ def validate_denoise_config(cfg, run_dir, full_dir, even_dir, odd_dir, ncols, *,
     for key in ('warmup', 'patience'):
         if type(train.get(key, 0)) is not int or train.get(key, 0) < 0:
             raise ValueError(f'train.{key} must be a nonnegative integer.')
+    if type(train.get('early_stopping_window', 10)) is not int or train.get('early_stopping_window', 10) < 1:
+        raise ValueError('train.early_stopping_window must be a positive integer.')
+    delta = train.get('min_delta', .001)
+    if type(delta) not in (int, float) or not np.isfinite(delta) or delta < 0:
+        raise ValueError('train.min_delta must be finite and nonnegative.')
     if not isinstance(train.get('lr'), (int, float)) or not np.isfinite(train['lr']) or train['lr'] <= 0:
         raise ValueError('train.lr must be finite and positive.')
     overlap = cfg['infer'].get('overlap')

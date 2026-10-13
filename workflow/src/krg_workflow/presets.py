@@ -25,6 +25,7 @@ def training_settings(mode='2.5d', architecture='nafnet25d', **overrides):
     train = dict(mode=mode, architecture=architecture, psz=256, n_slices=5,
                  mbsz=4 if mode=='2.5d' else 1, lr=.001, warmup=2000,
                  maxep=2000, patience=100, z_stride=1, num_workers=0, log_every=50,
+                 early_stopping_window=10, min_delta=.001,
                  precision='bf16' if architecture=='nafnet25d' else 'fp32')
     if architecture=='nafnet25d':
         train['nafnet'] = deepcopy(NAFNET)

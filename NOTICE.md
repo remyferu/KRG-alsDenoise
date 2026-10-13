@@ -27,7 +27,7 @@ deleting them. CLI formatting and logging paths also carry local portability fix
 
 Reference metrics add detached symmetric MSE and SSIM measurements, CSV/resume
 history, and optional notebook plot panels. They preserve the L1/LCL objective
-and existing checkpoint/early-stopping criteria.
+and existing raw checkpoint criteria.
 
 The HPC notebook derives from the KRG Noise2Inverse360 workflow v3.2. It retains
 native Vo centering, queues, linked zoom displays, live log output, and automatic
@@ -37,6 +37,10 @@ v3.4 extracts these notebook helpers into `workflow/src/krg_workflow`, adds expl
 run state and shared presets, and keeps the historical notebook code unchanged.
 Backend configuration, checkpoint loading and training loader construction are
 separated into helpers; `denoise/__init__.py` uses lazy legacy exports. Training
-losses, checkpoint formats and epoch-loop behavior are unchanged. Original
+losses and raw checkpoint formats are unchanged. Original
 documentation and the machine-specific environment export are retained under
 `docs/legacy/` and `envs/legacy/`.
+
+Early stopping now uses post-warmup evaluation total-loss moving averages and
+an absolute improvement threshold. Monitor state is stored in resume checkpoints.
+The optimization objective and raw L1/LCL/EDGE checkpoint criteria are unchanged.

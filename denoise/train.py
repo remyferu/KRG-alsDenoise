@@ -11,6 +11,7 @@ import yaml
 from denoise.configuration import read_config
 from denoise.checkpoints import initial_checkpoint as load_initial_checkpoint
 from denoise.training_setup import training_dataset, training_loader
+from denoise.early_stopping import MovingAverageEarlyStopping
 import datetime
 import numpy as np
 import torch
@@ -19,7 +20,7 @@ from matplotlib import pyplot as plt
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from denoise.model_factory import build_model, model_spec, forward_model
-from denoise.loss import LCL
+from denoise.loss import LCL, paired_objective
 from denoise.reference_metrics import (SSIMLoss, resolve_ssim_data_range,
                                        paired_reference_metrics, save_reference_history)
 from denoise.utils import save2img
@@ -34,6 +35,7 @@ def count_parameters(model):
 def run(args):
 
     params, mode = read_config(args)
+    stopping = MovingAverageEarlyStopping.from_config(params['train'])
 
     START_TIME = time.time()
 
@@ -57,6 +59,10 @@ def run(args):
     path_to_reconstructions = params['dataset']['directory_to_reconstructions']
     odir = getattr(args, 'output_dir', None) or (path_to_reconstructions + '/TrainOutput')
     initial_checkpoint = load_initial_checkpoint(params, args, mode, odir)
+    if getattr(args, 'resume', False):
+        restored = stopping.load_state_dict(initial_checkpoint.get('early_stopping_state'))
+        if restored and stopping.last_epoch != initial_checkpoint['epoch']:
+            raise ValueError('Early-stopping state does not match the resume epoch.')
     # Validate model options before loading the large reconstruction stacks.
     model = build_model(params, mode).cuda()
 
@@ -97,6 +103,8 @@ def run(args):
             _cfg = _yaml.safe_load(_f)
         _cfg['train']['mode'] = mode
         _cfg['train']['architecture'] = spec['architecture']
+        _cfg['train']['early_stopping_window'] = stopping.window
+        _cfg['train']['min_delta'] = stopping.min_delta
         with open(args.config, 'w') as _f:
             _yaml.safe_dump(_cfg, _f, default_flow_style=False, sort_keys=False)
     torch.distributed.barrier()
@@ -158,8 +166,7 @@ def run(args):
     reference_metric_history = []
     best_val_loss, best_edge, best_lcl_loss = np.inf, 0, np.inf
     best_val_epoch, best_edge_epoch, best_lcl_epoch = 0, 0, 0
-    epochs_since_improvement = 0
-    patience = params['train'].get('patience', 0)
+    patience = stopping.patience
     center_idx = n_slices // 2  # used only in 2.5d mode
 
     if getattr(args, 'resume', False):
@@ -184,7 +191,9 @@ def run(args):
         edge_values     = ckpt['edge_values']
         reference_metric_history = ckpt.get('reference_metric_history', [])
         continue_warmup = ckpt['continue_warmup']
-        epochs_since_improvement = ckpt.get('epochs_since_improvement', 0)
+        if rank == world_size - 1 and not restored:
+            log.info('Early-stopping state absent or policy changed; collecting a fresh '
+                     'post-warmup window and resetting patience. Raw checkpoints are retained.')
         log.info("Resuming training from epoch %d (model_updates=%d)" % (start_epoch, model_updates))
     elif getattr(args, 'finetune', None):
         finetune_path = args.finetune
@@ -198,11 +207,18 @@ def run(args):
     else:
         log.info('Initializing model from scratch')
 
+    if rank == world_size - 1:
+        log.info('Early-stopping monitor: metric=eval_total_loss; window=%d; '
+                 'min_delta=%.12g absolute objective units; '
+                 'patience=%d; raw-score checkpoints unchanged' %
+                 (stopping.window, stopping.min_delta, patience))
+
     # start training
     for epoch in range(start_epoch, params['train']['maxep'] + 1):
 
         step_losses, step_val_losses, step_lcl_loss, step_lcl_val_loss, step_edge_values = [], [], [], [], []
         step_l2, step_val_l2, step_ssim, step_val_ssim = [], [], [], []
+        step_total_losses, step_val_total_losses = [], []
 
         tick_ep = time.time()
 
@@ -230,7 +246,7 @@ def run(args):
             if model_updates <= warmup:
                 loss_lcl1 = torch.tensor(0.)
                 loss_lcl2 = torch.tensor(0.)
-                loss = 0.5 * (loss_view1 + loss_view2)
+                loss = paired_objective(loss_view1, loss_view2)
             else:
                 if mode == '3d':
                     # Apply LCL on center slice of 3D output
@@ -240,12 +256,13 @@ def run(args):
                 else:
                     loss_lcl1 = criterion_lcl(pred_view1) * beta
                     loss_lcl2 = criterion_lcl(pred_view2) * beta
-                loss = 0.5 * (loss_view1 + loss_view2) + 0.5 * (loss_lcl1 + loss_lcl2)
+                loss = paired_objective(loss_view1, loss_view2, loss_lcl1, loss_lcl2)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
+            step_total_losses.append(loss.detach().cpu().numpy())
             step_losses.append((loss_view1 + loss_view2).detach().cpu().numpy())
             step_lcl_loss.append((loss_lcl1 + loss_lcl2).detach().cpu().numpy())
             if rank == world_size - 1:
@@ -287,6 +304,11 @@ def run(args):
                     lap_score = laplacian_score_batch(pred_view1.cpu()) + laplacian_score_batch(pred_view2.cpu())
 
                 loss = loss_view1 + loss_view2
+                if model_updates > warmup:
+                    total_loss = paired_objective(loss_view1, loss_view2, loss_lcl1, loss_lcl2)
+                else:
+                    total_loss = paired_objective(loss_view1, loss_view2)
+                step_val_total_losses.append(total_loss.detach().cpu().numpy())
                 step_edge_values.append(lap_score)
                 step_val_losses.append(loss.detach().cpu().numpy())
                 loss_lcl = loss_lcl1 + loss_lcl2
@@ -302,13 +324,9 @@ def run(args):
         # Early stopping: rank world_size-1 decides, broadcasts to all ranks
         stop_tensor = torch.zeros(1, dtype=torch.int32, device='cuda')
         if rank == world_size - 1:
-            if patience > 0 and not continue_warmup:
-                if np.mean(step_val_losses) < best_val_loss:
-                    epochs_since_improvement = 0
-                else:
-                    epochs_since_improvement += 1
-                if epochs_since_improvement >= patience:
-                    stop_tensor.fill_(1)
+            # The transition epoch may contain warmup batches and is excluded.
+            if stopping.update(epoch, np.mean(step_val_total_losses), warming_up=continue_warmup):
+                stop_tensor.fill_(1)
         torch.distributed.broadcast(stop_tensor, src=world_size - 1)
         early_stop = bool(stop_tensor.item())
 
@@ -318,6 +336,10 @@ def run(args):
             continue
 
         log.info('Epoch %d' % epoch)
+        log.info('[Train] Total loss: %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
+            np.mean(step_total_losses), step_total_losses[0], step_total_losses[-1], ep_time))
+        log.info('[Val]   Total loss: %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
+            np.mean(step_val_total_losses), step_val_total_losses[0], step_val_total_losses[-1], ep_time))
         log.info('[Train] L1 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
             np.mean(step_losses), step_losses[0], step_losses[-1], ep_time))
         log.info('[Train] LCL loss:   %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
@@ -386,7 +408,6 @@ def run(args):
         if model_updates > warmup and continue_warmup:
             best_edge, best_lcl_loss = 0, np.inf
             best_edge_epoch, best_lcl_epoch = 0, 0
-            epochs_since_improvement = 0
             continue_warmup = False
 
         CRNT_TIME = time.time()
@@ -413,6 +434,18 @@ def run(args):
         log.info('Highest model EDGE score %.6f at epoch %d' % (best_edge, best_edge_epoch))
         log.info('Number of model updates: %s' % f"{model_updates:,}")
         log.info('Is model warming up?: %s' % continue_warmup)
+        if stopping.current_mean is not None:
+            patience_status = ('%d/%d' % (stopping.epochs_since_improvement, patience)
+                               if patience > 0 else '%d (stopping disabled)' % stopping.epochs_since_improvement)
+            log.info('[EarlyStopping] mean total loss: %.6f; best qualifying mean: %.6f at epoch %d; '
+                     'epochs without improvement: %s' %
+                     (stopping.current_mean, stopping.best_mean, stopping.best_epoch,
+                      patience_status))
+        elif continue_warmup:
+            log.info('[EarlyStopping] Waiting for warmup to finish.')
+        else:
+            log.info('[EarlyStopping] Collecting post-warmup epochs: %d/%d' %
+                     (len(stopping.recent_losses), stopping.window))
 
         # View the training/validation loss during training
         if epoch % 5 == 0:
@@ -464,9 +497,13 @@ def run(args):
             'edge_values': edge_values,
             'reference_metric_history': reference_metric_history,
             'continue_warmup': continue_warmup,
-            'epochs_since_improvement': epochs_since_improvement,
+            'epochs_since_improvement': stopping.epochs_since_improvement,
+            'early_stopping_state': stopping.state_dict(),
         }, f"{odir}/resume.pth")
 
         if early_stop:
-            log.info("Early stopping: no val loss improvement for %d epochs (best was epoch %d)" % (patience, best_val_epoch))
+            log.info('Early stopping: no %d-epoch mean total loss improvement exceeding %.12g '
+                     'for %d eligible epochs (best qualifying mean %.6f at epoch %d)' %
+                     (stopping.window, stopping.min_delta, patience,
+                      stopping.best_mean, stopping.best_epoch))
             break

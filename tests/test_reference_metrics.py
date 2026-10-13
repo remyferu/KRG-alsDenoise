@@ -99,7 +99,7 @@ class ReferenceMetricTests(unittest.TestCase):
                       and any(isinstance(t, ast.Name) and t.id == 'loss' for t in node.targets)]
         for expression in objective:
             names = {node.id for node in ast.walk(expression) if isinstance(node, ast.Name)}
-            self.assertTrue(names <= {'loss_view1', 'loss_view2', 'loss_lcl1', 'loss_lcl2'})
+            self.assertTrue(names <= {'paired_objective', 'loss_view1', 'loss_view2', 'loss_lcl1', 'loss_lcl2'})
         source = (ROOT/'denoise/train.py').read_text()
         self.assertIn('criterion = torch.nn.L1Loss()', source)
         self.assertIn('beta = .01', source)
@@ -136,6 +136,29 @@ class HistoryMetricTests(unittest.TestCase):
             log.write_text(old)
             result = self.scope['plot_training_history'](log, Path(tmp)/'old_plots', show=False)
             self.assertEqual(result['epochs'], 1)
+
+    def test_total_loss_exports_include_the_logged_stopping_mean(self):
+        text = ''
+        for epoch, total in ((11, 1.2), (12, 1.), (13, .8)):
+            text += (f'Epoch {epoch}\n[Train] L1 loss: 2\n[Train] LCL loss: .01\n'
+                     f'[Val] L1 loss: 2\n[Val] LCL loss: .01\n'
+                     f'[Train] Total loss: {total}\n[Val] Total loss: {total}\n')
+            if epoch == 13:
+                text += '[EarlyStopping] mean total loss: 1.0; best qualifying mean: 1.0 at epoch 13; epochs without improvement: 0/100\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'train.log'
+            path.write_text(text, encoding='utf-8')
+            parsed = self.scope['parse_training_history'](path)
+            self.assertIsNone(parsed['rows'][0]['early_stop_mean'])
+            self.assertEqual(parsed['rows'][-1]['eval_total'], .8)
+            self.assertEqual(parsed['rows'][-1]['early_stop_mean'], 1.)
+            result = self.scope['plot_training_history'](path, Path(tmp)/'plots', moving_window=2, show=False)
+            with Path(result['paths']['csv']).open() as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows[-1]['eval_total'], '0.8')
+            self.assertEqual(rows[-1]['early_stop_mean'], '1.0')
+            self.assertEqual(rows[0]['early_stop_mean'], '')
+            self.assertTrue(Path(result['paths']['svg']).is_file())
 
 
 if __name__ == '__main__':
