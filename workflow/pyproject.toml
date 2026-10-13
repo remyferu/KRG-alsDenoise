@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61,<76"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "krg-ct-workflow"
+version = "3.4.0"
+description = "ALS reconstruction and notebook orchestration without PyTorch"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+dependencies = ["numpy<2", "h5py", "tifffile", "PyYAML", "scipy", "scikit-image", "matplotlib", "Pillow"]
+
+[project.optional-dependencies]
+notebook = ["IPython", "ipywidgets"]
+
+[project.scripts]
+krg-workflow = "krg_workflow.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
