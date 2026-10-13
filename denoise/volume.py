@@ -7,7 +7,8 @@ Denoise the entire CT volume using a trained Noise2Inverse model.
 
 import os
 import time
-import yaml
+from denoise.configuration import read_config, output_path
+from denoise.checkpoints import load_inference_model
 import numpy as np
 import torch
 import warnings
@@ -18,7 +19,7 @@ from pathlib import Path
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
-from denoise.model_factory import load_model, forward_model
+from denoise.model_factory import forward_model
 from denoise.data import TomoDatasetInfer
 from denoise.data3d import TomoDataset3DInfer, _hann3d
 from denoise.data_utils import InferenceBatchSizeOptimizer
@@ -28,33 +29,18 @@ from denoise import log
 
 def run(args):
 
-    # Read the YAML file
-    with open(args.config, 'r') as file:
-        params = yaml.safe_load(file)
+    params, mode = read_config(args)
 
     # Determine mode: CLI flag > YAML config > default 2.5d
-    mode = getattr(args, 'mode', None) or params['train'].get('mode', '2.5d')
 
     # setup output directory
-    full_recon_name = params['dataset']['full_recon_name']
-    base_name = full_recon_name[:-4] if full_recon_name.endswith('_rec') else full_recon_name
-    suffix = '_nafnet25d' if params['train'].get('architecture') == 'nafnet25d' else ''
-    output_dir = getattr(args, 'output_dir', None) or (
-        params['dataset']['directory_to_reconstructions'] + '/' + base_name + '_denoised_volume_' + mode + suffix)
+    output_dir = output_path(params, mode, 'volume', getattr(args, 'output_dir', None))
     log.info("Inference mode: %s" % mode)
 
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load checkpoint
-    _ckpt_map = {'val': 'best_val_model.pth', 'lcl': 'best_lcl_model.pth', 'edge': 'best_edge_model.pth'}
-    ckpt_name = _ckpt_map[getattr(args, 'checkpoint', 'lcl')]
-    model_dir = getattr(args, 'model_dir', None) or \
-        params['dataset']['directory_to_reconstructions'] + '/TrainOutput'
-    path_to_mdl = os.path.join(model_dir, ckpt_name)
-    log.info("Using checkpoint: %s" % ckpt_name)
-    ckpt = torch.load(path_to_mdl, map_location='cpu', weights_only=False)
-
-    model = load_model(params, ckpt, mode).to(dev).eval()
+    model = load_inference_model(params, args, mode, dev)
     precision = params.get('infer', {}).get('precision', 'fp32')
     if os.path.exists(output_dir):
         raise RuntimeError('Inference output already exists: %s. Choose a new --output-dir.' % output_dir)

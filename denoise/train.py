@@ -8,21 +8,20 @@ Noise2Inverse model training using distributed data parallel (DDP).
 import os
 import time
 import yaml
+from denoise.configuration import read_config
+from denoise.checkpoints import initial_checkpoint as load_initial_checkpoint
+from denoise.training_setup import training_dataset, training_loader
 import datetime
 import numpy as np
 import torch
 from copy import deepcopy
 from matplotlib import pyplot as plt
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data.distributed import DistributedSampler
-from torch.utils.data import DataLoader
 
-from denoise.model_factory import build_model, model_spec, validate_checkpoint, forward_model
+from denoise.model_factory import build_model, model_spec, forward_model
 from denoise.loss import LCL
 from denoise.reference_metrics import (SSIMLoss, resolve_ssim_data_range,
                                        paired_reference_metrics, save_reference_history)
-from denoise.data import TomoDatasetTrain
-from denoise.data3d import TomoDataset3DTrain
 from denoise.utils import save2img
 from denoise.eval import laplacian_score_batch
 from denoise import log
@@ -34,9 +33,7 @@ def count_parameters(model):
 
 def run(args):
 
-    # read the YAML file
-    with open(args.config, 'r') as file:
-        params = yaml.safe_load(file)
+    params, mode = read_config(args)
 
     START_TIME = time.time()
 
@@ -45,7 +42,6 @@ def run(args):
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
 
-    mode = getattr(args, 'mode', None) or params['train'].get('mode', '2.5d')
     if getattr(args, 'architecture', None):
         params['train']['architecture'] = args.architecture
     spec = model_spec(params, mode)
@@ -60,19 +56,7 @@ def run(args):
 
     path_to_reconstructions = params['dataset']['directory_to_reconstructions']
     odir = getattr(args, 'output_dir', None) or (path_to_reconstructions + '/TrainOutput')
-    initial_checkpoint = None
-    initial_path = None
-    if getattr(args, 'resume', False):
-        initial_path = os.path.join(odir, 'resume.pth')
-    elif getattr(args, 'finetune', None):
-        initial_path = args.finetune
-        if os.path.isdir(initial_path):
-            initial_path = os.path.join(initial_path, 'best_val_model.pth')
-    if initial_path:
-        initial_checkpoint = torch.load(initial_path, map_location='cpu', weights_only=False)
-        validate_checkpoint(initial_checkpoint, params, mode)
-    elif os.path.exists(odir):
-        raise RuntimeError('Training output already exists: %s. Use --resume or a new --output-dir.' % odir)
+    initial_checkpoint = load_initial_checkpoint(params, args, mode, odir)
     # Validate model options before loading the large reconstruction stacks.
     model = build_model(params, mode).cuda()
 
@@ -119,10 +103,7 @@ def run(args):
 
     log.info("Loading data into CPU memory, it will take a while ...")
 
-    if mode == '3d':
-        ds_train = TomoDataset3DTrain(params=params, config_file=args.config)
-    else:
-        ds_train = TomoDatasetTrain(params=params, config_file=args.config)
+    ds_train = training_dataset(params, args.config, mode)
 
     # Fix the reference SSIM intensity span for every batch/epoch and future resumes.
     ssim_range_tensor = torch.zeros(1, dtype=torch.float64, device='cuda')
@@ -148,14 +129,7 @@ def run(args):
             yaml.safe_dump(saved_config, stream, sort_keys=False)
     torch.distributed.barrier()
 
-    train_sampler = DistributedSampler(dataset=ds_train, shuffle=True, drop_last=True)
-    # 3D datasets can be hundreds of GB; forked workers trigger copy-on-write on
-    # every random patch access, ballooning memory.  num_workers=0 avoids the
-    # fork entirely — the main thread reads patches directly from shared RAM.
-    _nw = int(params['train'].get('num_workers', 0 if mode == '3d' else 4))
-    _pf = None if _nw == 0 else 2
-    dl_train = DataLoader(dataset=ds_train, batch_size=params['train']['mbsz'], sampler=train_sampler,
-                          num_workers=_nw, drop_last=False, prefetch_factor=_pf, pin_memory=True)
+    train_sampler, dl_train = training_loader(params, ds_train, mode)
 
     log.info("Loaded %d samples into CPU memory for training." % len(ds_train))
 

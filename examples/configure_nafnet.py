@@ -1,7 +1,12 @@
 """Create a fresh NAFNet config from an existing reconstructed scan config."""
 import argparse
 from pathlib import Path
+import sys
 import yaml
+
+# This checkout-local example shares defaults with the ALS workflow package.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'workflow/src'))
+from krg_workflow.presets import training_settings, inference_settings
 
 
 def configure(source, destination, n_slices=5, precision='bf16'):
@@ -14,14 +19,8 @@ def configure(source, destination, n_slices=5, precision='bf16'):
         raise ValueError('Choose a new output config; the existing config is preserved.')
     params = yaml.safe_load(source.read_text())
     train = params.setdefault('train', {})
-    train.update(mode='2.5d', architecture='nafnet25d', n_slices=n_slices,
-                 psz=256, mbsz=4, lr=0.001, warmup=2000, maxep=2000,
-                 patience=100, z_stride=1, precision=precision, num_workers=0,
-                 log_every=50)
-    train['nafnet'] = dict(width=32, stem_width=16, detail_blocks=4,
-                            encoder_blocks=[2, 2], middle_blocks=6, decoder_blocks=[2, 2])
-    params.setdefault('infer', {}).update(precision=precision, num_workers=0,
-                                         overlap=0.5, window='cosine', max_batch_size=32)
+    train.update(training_settings(n_slices=n_slices, precision=precision))
+    params.setdefault('infer', {}).update(inference_settings(train))
     destination.write_text(yaml.safe_dump(params, sort_keys=False))
     return params
 

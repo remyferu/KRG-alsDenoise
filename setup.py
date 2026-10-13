@@ -20,6 +20,7 @@ setup(
         'meta @ git+https://github.com/xray-imaging/meta.git',
     ],
     zip_safe = False,
+    extras_require = {'docs': ['sphinx', 'sphinx-rtd-theme', 'sphinxcontrib-bibtex']},
     url = 'https://github.com/remyferu/KRG-alsDenoise',
     download_url = 'https://github.com/remyferu/KRG-alsDenoise.git',
     license = 'BSD-3-Clause AND MIT; see third_party/',

@@ -6,7 +6,8 @@ Denoise a single CT slice using a trained Noise2Inverse model.
 """
 
 import os
-import yaml
+from denoise.configuration import read_config, output_path
+from denoise.checkpoints import load_inference_model
 import numpy as np
 import torch
 import tifffile
@@ -15,7 +16,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from tqdm import tqdm
-from denoise.model_factory import load_model, forward_model
+from denoise.model_factory import forward_model
 from denoise.utils import save2img
 from denoise.data_utils import extract_sliding_window_patches_25d, stitch_sliding_window_patches
 from denoise import tiffs as tiffs_mod
@@ -24,12 +25,9 @@ from denoise import log
 
 def run(args):
 
-    # Read the YAML file
-    with open(args.config, 'r') as file:
-        params = yaml.safe_load(file)
+    params, mode = read_config(args)
 
     # 3D mode operates on full volumes — single-slice inference is not meaningful
-    mode = getattr(args, 'mode', None) or params['train'].get('mode', '2.5d')
     if mode == '3d':
         raise RuntimeError(
             "The 'slice' command is not available in --mode 3d.\n"
@@ -38,11 +36,7 @@ def run(args):
         )
 
     # create directory for denoised slices
-    full_recon_name = params['dataset']['full_recon_name']
-    base_name = full_recon_name[:-4] if full_recon_name.endswith('_rec') else full_recon_name
-    suffix = '_nafnet25d' if params['train'].get('architecture') == 'nafnet25d' else ''
-    out_path = getattr(args, 'output_dir', None) or (
-        params['dataset']['directory_to_reconstructions'] + '/' + base_name + '_denoised_slices' + suffix)
+    out_path = output_path(params, mode, 'slice', getattr(args, 'output_dir', None))
     if not os.path.isdir(out_path):
         os.mkdir(out_path)
 
@@ -51,14 +45,7 @@ def run(args):
 
     # load in model
     n_slices = params['train']['n_slices']
-    _ckpt_map = {'val': 'best_val_model.pth', 'lcl': 'best_lcl_model.pth', 'edge': 'best_edge_model.pth'}
-    ckpt_name = _ckpt_map[getattr(args, 'checkpoint', 'lcl')]
-    model_dir = getattr(args, 'model_dir', None) or \
-        params['dataset']['directory_to_reconstructions'] + '/TrainOutput'
-    path_to_mdl = os.path.join(model_dir, ckpt_name)
-    log.info("Using checkpoint: %s" % ckpt_name)
-    checkpoint = torch.load(path_to_mdl, map_location=torch.device('cpu'), weights_only=False)
-    model = load_model(params, checkpoint, mode).to(dev).eval()
+    model = load_inference_model(params, args, mode, dev)
     precision = params.get('infer', {}).get('precision', 'fp32')
 
     log.info("Loading slice %d" % args.slice_number)

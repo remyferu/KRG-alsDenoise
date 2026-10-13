@@ -46,5 +46,21 @@
 # POSSIBILITY OF SUCH DAMAGE.                                             #
 # #########################################################################
 
-from denoise.model import *
-from denoise.utils import *
+"""Denoising backend. CLI help does not import Torch or Matplotlib.
+
+Legacy model/utility exports are loaded only when explicitly requested.
+"""
+import importlib
+
+_MODEL_EXPORTS = ('unet_box_gn', 'unet_bottleneck_gn', 'unet_up', 'unet_down', 'unet_ns_gn')
+_UTIL_EXPORTS = ('save2img_rgb', 'save2img', 'scale2uint8', 'str2bool')
+__all__ = list(_MODEL_EXPORTS + _UTIL_EXPORTS)
+
+
+def __getattr__(name):
+    if name in _MODEL_EXPORTS + _UTIL_EXPORTS:
+        module = importlib.import_module('denoise.model' if name in _MODEL_EXPORTS else 'denoise.utils')
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError('module denoise has no attribute '+repr(name))
