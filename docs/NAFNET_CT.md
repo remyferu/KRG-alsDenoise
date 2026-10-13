@@ -2,14 +2,19 @@
 
 ## Install on NERSC
 
-Clone this private repository using your normal GitHub authentication. Install it
-in the existing PyTorch `n2i` environment, leaving the ALS reconstruction kernel
-and TomoPy environment in place:
+For a first installation, follow [First-time NERSC setup](SETUP_NERSC.md). It covers
+source downloads, creating the ALS reconstruction and PyTorch environments,
+registering/selecting the Jupyter kernel, choosing a compute allocation, and input
+and output paths. It is also embedded in the v3.3 notebook; no earlier notebook is
+needed.
+
+Use `als832` as the notebook kernel for reconstruction. The notebook launches
+`n2i/bin/denoise` separately for training and inference. If both environments are
+already working, update/install this repository in n2i as follows:
 
 ```bash
-cd ~/microct-n2i-source
-git clone https://github.com/remyferu/KRG-alsDenoise.git
-cd KRG-alsDenoise
+cd ~/microct-n2i-source/KRG-alsDenoise
+git pull --ff-only
 ~/microct-n2i-envs/n2i/bin/python -m pip install --no-deps -e .
 export MPLBACKEND=Agg
 ~/microct-n2i-envs/n2i/bin/denoise train -h
@@ -127,8 +132,9 @@ maximum EDGE proves accurate geometry.
 
 ## Notebook and validation
 
-The v3.3 notebook uses NAFNet by default for fresh 2.5D runs and retains the v3.2
-reconstruction, COR, queue, zoom, live log and history features. Choose a new run
+The v3.3 notebook is a standalone guide with setup, reconstruction, COR, queue,
+zoom, live log and history instructions. It uses NAFNet by default for fresh 2.5D
+runs. Choose a new run
 label for a new architecture. It requires this repository's backend, checked via
 `--architecture` in CLI help. Changing its 2.5D `TRAIN_ARCHITECTURE` to `unet`
 selects the baseline. The original v3.2 notebook is unchanged.

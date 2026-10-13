@@ -17,7 +17,8 @@ parameters** at the supplied settings and supports 5, 7, or 9 slices. This is an
 experimental adaptation: preservation of 2–5 pixel features needs validation on
 your scans.
 
-Start with the [NERSC setup and usage guide](docs/NAFNET_CT.md), or the
+Start with [First-time NERSC setup](docs/SETUP_NERSC.md), then the
+[denoising usage guide](docs/NAFNET_CT.md), or open the
 [v3.3 HPC notebook](notebooks/Noise2Inverse360_HPC_v3.3.ipynb).
 Reconstructed full/even/odd TIFF stacks from the existing workflow can be reused.
 
