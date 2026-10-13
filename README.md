@@ -18,6 +18,11 @@ The [training snooper](notebooks/Training_Snooper.ipynb) reads an active log in
 a separate kernel and produces the same loss-history plots without loading
 the model. Each refresh saves an independent snapshot.
 
+The [scratch cleanup notebook](notebooks/Scratch_Cleanup.ipynb) lists test
+directories under a scratch root and deletes selected runs after a size preview
+and explicit confirmation. It includes incomplete runs and checks for locks
+and changed contents before deletion.
+
 ## Setup and usage
 
 Follow [NERSC setup](docs/SETUP_NERSC.md) to install the two environments:
