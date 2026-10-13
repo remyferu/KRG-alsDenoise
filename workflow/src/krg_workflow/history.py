@@ -2,6 +2,7 @@
 from pathlib import Path
 import csv
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 import numpy as np
 import re
 import uuid
@@ -149,7 +150,7 @@ def parse_training_history(log_path):
 
 
 def plot_training_history(log_path, output_dir=None, moving_window=10, show=True, outcome=None):
-    """Export log-log loss curves and record lows after warmup."""
+    """Export semilog loss curves and record lows after warmup."""
     if type(moving_window) is not int or moving_window < 1:
         raise ValueError('moving_window must be a positive integer.')
     history = parse_training_history(log_path)
@@ -180,7 +181,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
         return np.where(np.isfinite(array) & (array > 0), array, np.nan)
 
     def mark_records(ax, key, color):
-        points = [p for p in record_lows[key] if p['epoch'] > 0 and p['value'] > 0]
+        points = [p for p in record_lows[key] if p['value'] > 0]
         if points:
             ax.scatter([p['epoch'] for p in points], [p['value'] for p in points],
                        s=24, color=color, edgecolors='white', linewidths=.5, zorder=6)
@@ -251,24 +252,24 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                     ax.set_ylim(1e-8, 1)
                     ax.text(.5, .5, 'No positive loss values', transform=ax.transAxes,
                             ha='center', color='#687889', fontsize=10)
-                ax.set_xscale('log', nonpositive='mask')
+                ax.set_xscale('linear')
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                ax.xaxis.set_minor_locator(AutoMinorLocator(2))
                 ax.set_yscale('log', nonpositive='mask')
                 ax.grid(which='major', axis='both', color='#dce3ea', linewidth=0.7)
                 ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=0.4)
-                positive_epochs = epochs[epochs > 0]
-                ax.set_xlim(positive_epochs[0] / 1.15 if len(positive_epochs) else 1,
-                            positive_epochs[-1] * 1.15 if len(positive_epochs) else 10)
+                ax.set_xlim(epochs[0] - .5, epochs[-1] + .5)
                 ax.tick_params(axis='both', length=0, pad=7)
                 ax.legend(loc='upper right', frameon=False, ncol=2)
                 if best is not None:
                     label = 'Lowest post-warmup evaluation L1' if train_key == 'train_l1' else 'Lowest post-warmup evaluation LCL'
                     note = f"{label}: {best['value']:.6f}\nEpoch {best['epoch']}"
-                    position = (0.03, 0.12) if train_key == 'train_l1' else (0.14, 0.72)
+                    position = (0.03, 0.06)
                     box = dict(boxstyle='round,pad=.5', facecolor='white', edgecolor='#e4e8ed')
-                    if best['epoch'] > 0 and best['value'] > 0:
-                        ax.annotate(note, xy=(best['epoch'], best['value']), xytext=position, textcoords='axes fraction', fontsize=10, bbox=box, arrowprops=dict(arrowstyle='-', color='#a7b2be', linewidth=1))
+                    if best['value'] > 0:
+                        ax.annotate(note, xy=(best['epoch'], best['value']), xytext=position, textcoords='axes fraction', fontsize=10, bbox=box, zorder=8, arrowprops=dict(arrowstyle='-', color='#a7b2be', linewidth=1))
                     else:
-                        ax.text(*position, note + ' (outside log axes)', transform=ax.transAxes, fontsize=10, bbox=box)
+                        ax.text(*position, note + ' (outside log loss axis)', transform=ax.transAxes, fontsize=10, bbox=box, zorder=8)
             if metadata['warmup_end'] is not None:
                 axes[0].text(metadata['warmup_end'] + 5, 0.88, 'LCL warmup ended', transform=axes[0].get_xaxis_transform(), fontsize=9, color='#687889')
             if has_lr:
@@ -280,11 +281,11 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                 ax.set_ylabel('Adam learning rate')
                 ax.grid(which='major', axis='both', color='#dce3ea', linewidth=.7)
                 ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=.4)
-            axes[-1].set_xlabel('Epoch (log scale)', labelpad=10)
+            axes[-1].set_xlabel('Epoch', labelpad=10)
             record_note = ('Dots: successive record lows after warmup.'
                            if any(row['warmup_epoch'] is not None for row in rows) else
                            'Warmup status unavailable; record-low markers omitted.')
-            fig.text(0.08, 0.073, record_note+' Log axes omit nonpositive values.', fontsize=10, color='#596b7d')
+            fig.text(0.08, 0.073, record_note+' Log loss axes omit nonpositive values.', fontsize=10, color='#596b7d')
             curve_note = f'Faint: raw epochs. Solid: trailing {moving_window}-epoch display averages.'
             if has_total and np.isfinite(values['early_stop_mean']).any():
                 curve_note += ' Dashed: logged stopping monitor.'

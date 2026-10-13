@@ -78,7 +78,7 @@ class HistoryPlottingTests(unittest.TestCase):
                 dict(epoch=5, warmup_epoch=False, eval_l2=1)]
         self.assertEqual(history.record_low_losses(rows)['eval_l2'], [dict(epoch=2, value=2), dict(epoch=4, value=0)])
 
-    def test_log_axes_grids_and_marker_coordinates_match_raw_epoch_records(self):
+    def test_semilog_axes_grids_and_marker_coordinates_match_raw_epoch_records(self):
         figures = []
         close = history.plt.close
 
@@ -97,7 +97,7 @@ class HistoryPlottingTests(unittest.TestCase):
             axes = figures[0].axes
             self.assertEqual(len(axes), 6)
             for ax in axes:
-                self.assertEqual(ax.get_xscale(), 'log')
+                self.assertEqual(ax.get_xscale(), 'linear')
                 self.assertEqual(ax.get_yscale(), 'log')
                 self.assertGreater(ax.get_xlim()[0], 0)
                 for axis in (ax.xaxis, ax.yaxis):

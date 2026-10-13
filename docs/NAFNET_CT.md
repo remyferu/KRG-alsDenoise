@@ -225,7 +225,7 @@ plot panels when they are present. Old L1/LCL-only logs still work.
 New logs also add an EMA total-loss overlay and an LR panel; CSV exports retain
 the raw EMA values, learning rate and reduction flag for each epoch.
 
-History plots use logarithmic epoch and loss axes, with major and minor gridlines.
+History plots use a linear epoch axis and logarithmic loss axes, with major and minor gridlines.
 Dots mark each strict record low in the raw training and evaluation losses,
 tracked separately after warmup. EMA and the logged stopping monitor have their
 own record-low points. Display smoothing does not affect these markers.
