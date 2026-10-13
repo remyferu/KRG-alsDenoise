@@ -25,9 +25,14 @@ def load_inference_model(params, args, mode, device):
     name = CHECKPOINT_NAMES[getattr(args,'checkpoint','ema')]
     directory = getattr(args,'model_dir',None) or os.path.join(
         params['dataset']['directory_to_reconstructions'],'TrainOutput')
-    log.info('Using checkpoint: %s' % name)
-    checkpoint = torch.load(os.path.join(directory,name),map_location='cpu',weights_only=False)
-    return load_model(params,checkpoint,mode).to(device).eval()
+    path = Path(directory) / name
+    checkpoint = torch.load(path,map_location='cpu',weights_only=False)
+    epoch = checkpoint.get('epoch')
+    epoch = epoch if type(epoch) is int and epoch > 0 else None
+    log.info('Using checkpoint: %s | training epoch: %s' % (name, epoch if epoch is not None else 'unknown (not recorded)'))
+    model = load_model(params,checkpoint,mode).to(device).eval()
+    model.inference_checkpoint = dict(filename=name, path=str(path.resolve()), epoch=epoch)
+    return model
 
 
 def initial_checkpoint(params, args, mode, output):

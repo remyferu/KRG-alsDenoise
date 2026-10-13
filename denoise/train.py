@@ -370,7 +370,8 @@ def run(args):
             save_checkpoint({
                 'model_spec': deepcopy(spec),
                 'model_state_dict': deepcopy(model.module.state_dict()),
-                'optimizer_state_dict': deepcopy(optimizer.state_dict())
+                'optimizer_state_dict': deepcopy(optimizer.state_dict()),
+                'epoch': epoch,
             }, mdl_fname)
 
         # Save the best model with the lowest val loss
@@ -381,7 +382,8 @@ def run(args):
             save_checkpoint({
                 'model_spec': deepcopy(spec),
                 'model_state_dict': deepcopy(model.module.state_dict()),
-                'optimizer_state_dict': deepcopy(optimizer.state_dict())
+                'optimizer_state_dict': deepcopy(optimizer.state_dict()),
+                'epoch': epoch,
             }, mdl_fname)
 
         # Save the best model with the highest edge value
@@ -392,7 +394,8 @@ def run(args):
             save_checkpoint({
                 'model_spec': deepcopy(spec),
                 'model_state_dict': deepcopy(model.module.state_dict()),
-                'optimizer_state_dict': deepcopy(optimizer.state_dict())
+                'optimizer_state_dict': deepcopy(optimizer.state_dict()),
+                'epoch': epoch,
             }, mdl_fname)
 
         if ema_values is not None and not warming_epoch and ema_values['total'] < best_ema_total:

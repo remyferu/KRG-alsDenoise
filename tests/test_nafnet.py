@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import tempfile
 import unittest
@@ -181,7 +182,7 @@ class WorkflowTests(unittest.TestCase):
             cfg_path = root/'config.yaml'; cfg_path.write_text(yaml.safe_dump(params))
             model_dir = root/'models'; model_dir.mkdir()
             model = build_model(params)
-            torch.save(dict(model_spec=model_spec(params), model_state_dict=model.state_dict()),
+            torch.save(dict(model_spec=model_spec(params), model_state_dict=model.state_dict(), epoch=37),
                        model_dir/'best_val_model.pth')
             args = SimpleNamespace(config=str(cfg_path), checkpoint='val', model_dir=str(model_dir),
                                     slice_number=1, start_slice='', end_slice='', mode=None)
@@ -193,6 +194,11 @@ class WorkflowTests(unittest.TestCase):
             output = sorted((root/'scan_denoised_volume_2.5d_nafnet25d').glob('*.tif*'))
             self.assertEqual(len(output), 3)
             np.testing.assert_allclose(np.stack([tifffile.imread(p) for p in output]), volume, atol=1e-5)
+            for path in [root/'scan_denoised_slices_nafnet25d'/'00001.tiff', *output]:
+                with tifffile.TiffFile(path) as image:
+                    info = json.loads(image.pages[0].description)['inference_checkpoint']
+                self.assertEqual(info['epoch'], 37)
+                self.assertEqual(info['filename'], 'best_val_model.pth')
 
 
 if __name__ == '__main__':

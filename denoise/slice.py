@@ -102,5 +102,6 @@ def run(args):
     denoised = denoised * std4norm + mean4norm
 
     # save denoised slice
-    tifffile.imwrite(f'{out_path}/{args.slice_number:05d}.tiff', denoised)
+    tifffile.imwrite(f'{out_path}/{args.slice_number:05d}.tiff', denoised,
+                     metadata=dict(inference_checkpoint=model.inference_checkpoint))
     log.info("Saved denoised slice to %s/%05d.tiff" % (out_path, args.slice_number))

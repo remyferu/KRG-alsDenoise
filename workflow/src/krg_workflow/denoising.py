@@ -1,5 +1,6 @@
 """Training configuration, checkpoint and denoised-volume validation."""
 from pathlib import Path
+import json
 import numpy as np
 import tifffile
 from .files import tiff_paths
@@ -114,6 +115,22 @@ def validate_checkpoint(train_dir, checkpoint):
     if not path.is_file():
         raise FileNotFoundError(f'Requested checkpoint is not saved yet: {path}')
     return path
+
+
+def inference_checkpoint_info(image_path):
+    """Read the checkpoint that produced a TIFF, independently of current weights."""
+    with tifffile.TiffFile(image_path) as image:
+        description = image.pages[0].description
+    try:
+        metadata = json.loads(description or '{}')
+    except (TypeError, ValueError):
+        metadata = {}
+    info = metadata.get('inference_checkpoint', {}) if isinstance(metadata, dict) else {}
+    if not isinstance(info, dict):
+        info = {}
+    epoch = info.get('epoch')
+    return dict(filename=info.get('filename'), path=info.get('path'),
+                epoch=epoch if type(epoch) is int and epoch > 0 else None)
 
 
 def validate_denoised_volume(folder, nrows, ncols):

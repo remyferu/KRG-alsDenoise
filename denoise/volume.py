@@ -123,8 +123,9 @@ def run(args):
     # Save volume
     log.info("Saving data to %s ..." % output_dir)
     if len(args.start_slice) == 0:
-        tiffs_mod.save_stack(output_dir, preds)
+        tiffs_mod.save_stack(output_dir, preds, metadata=dict(inference_checkpoint=model.inference_checkpoint))
     else:
-        tiffs_mod.save_stack(output_dir, preds, offset=int(args.start_slice))
+        tiffs_mod.save_stack(output_dir, preds, offset=int(args.start_slice),
+                             metadata=dict(inference_checkpoint=model.inference_checkpoint))
 
     log.info("Done.")

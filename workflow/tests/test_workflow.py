@@ -282,6 +282,21 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             zoom_image_viewer([image],captured=captured,context=self.run)
 
+    def test_cached_denoising_inspection_reports_the_epoch_of_the_image(self):
+        self.write_stacks()
+        self.run.training = SimpleNamespace(mode='3d')
+        folder = self.run.run_dir/'cached_volume'
+        folder.mkdir()
+        tifffile.imwrite(folder/'00001.tiff',np.ones((32,32),dtype=np.float32),
+                         metadata=dict(inference_checkpoint=dict(filename='best_ema_model.pth',epoch=37)))
+        messages = io.StringIO()
+        with patch.object(api,'denoised_path',return_value=folder), \
+             patch('krg_workflow.notebook_ui.zoom_image_viewer',return_value='viewer') as viewer, \
+             contextlib.redirect_stdout(messages):
+            self.assertEqual(api.inspect_denoising(self.run,self.workspace,row=1),'viewer')
+        self.assertIn('Checkpoint: best_ema_model.pth | training epoch: 37',messages.getvalue())
+        self.assertIn('epoch 37',viewer.call_args.kwargs['title'])
+
     def test_lightweight_imports_without_torch_or_notebook_dependencies(self):
         command = [sys.executable,'-c',"import krg_workflow, krg_workflow.api, denoise; import sys; assert 'torch' not in sys.modules; assert 'IPython' not in sys.modules"]
         subprocess.run(command,cwd=ROOT,check=True,env=dict(os.environ,PYTHONPATH=str(ROOT/'workflow/src')))

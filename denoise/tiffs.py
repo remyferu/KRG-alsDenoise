@@ -56,12 +56,13 @@ def glob(dir_path):
     return natural_sorted(dir_path.glob("*.tif*"))
 
 
-def save_stack(path, stack, offset=0, exist_ok=True, parents=False):
+def save_stack(path, stack, offset=0, exist_ok=True, parents=False, metadata=None):
+    """Write one TIFF per slice with optional shared inference provenance."""
     path = Path(path).expanduser().resolve()
     path.mkdir(exist_ok=exist_ok, parents=parents)
     for i in tqdm(range(stack.shape[0])):
         opath = path / f"{i+offset:05d}.tiff"
-        tifffile.imwrite(str(opath), stack[i])
+        tifffile.imwrite(str(opath), stack[i], **({} if metadata is None else dict(metadata=metadata)))
 
 
 def load_sino(paths, binning=1, dtype=None, flip_y=False):

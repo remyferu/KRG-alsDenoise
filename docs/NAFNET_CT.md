@@ -242,6 +242,13 @@ writes separate exports; model state and training outputs are not modified.
 
 ## Inference and feature assessment
 
+Denoising inspection reports the selected checkpoint's training epoch in its
+output and viewer title. New L1, LCL and EDGE checkpoints record their epoch;
+EMA checkpoints already include it. Inference embeds checkpoint provenance in
+each output TIFF, so cached images retain the epoch of the weights that produced
+them even when training later replaces the checkpoint. Older checkpoints or
+TIFFs without this metadata report `unknown (not recorded)`.
+
 ```bash
 denoise slice --config /path/to/sample_nafnet_config.yaml \
   --model-dir /path/to/TrainOutput_NAF --checkpoint ema --slice-number 300 \

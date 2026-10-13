@@ -16,7 +16,7 @@ from .runtime import (all_allocated_gpus, first_visible_gpu, require_compute_ses
 from .scans import fingerprint, inspect_scan, validate_als_metadata
 from .reconstruction import load_als, validate_stack
 from .presets import reconstruction_settings, training_settings, inference_settings
-from .denoising import validate_checkpoint, validate_denoise_config, validate_denoised_volume
+from .denoising import inference_checkpoint_info, validate_checkpoint, validate_denoise_config, validate_denoised_volume
 from .history import plot_training_history
 
 
@@ -325,6 +325,9 @@ def inspect_denoising(run, workspace, row=None, checkpoint='ema', gpu_id=None, o
     if not path.is_file():
         print('3D has no single-slice preview. Run volume inference, then inspect this row.')
         return None
+    info = inference_checkpoint_info(path)
+    epoch_label = str(info['epoch']) if info['epoch'] is not None else 'unknown (not recorded)'
+    print('Checkpoint:', info['filename'] or checkpoint, '| training epoch:', epoch_label)
     before = tifffile.imread(validate_stack(reconstruction_paths(run)[0],run.shape[1],run.shape[2])[row])
     after = tifffile.imread(path)
     if after.shape!=before.shape or not np.isfinite(after).all() or not np.isfinite(before).all():
@@ -334,7 +337,7 @@ def inspect_denoising(run, workspace, row=None, checkpoint='ema', gpu_id=None, o
     span = max(float(np.percentile(np.abs(residual),99)),1e-8)
     return zoom_image_viewer([before,after,residual],titles=['Reconstructed','Denoised','Residual'],
         limits=[(low,high),(low,high),(-span,span)],cmaps=['gray','gray','coolwarm'],
-        captured=captured,context=run,title=f'Denoising inspection — row {row}',**(view_options or {}))
+        captured=captured,context=run,title=f'Denoising inspection | row {row} | {checkpoint} | epoch {epoch_label}',**(view_options or {}))
 
 
 def denoise_volume(run, workspace, checkpoint='ema', gpu_id=None, on_line=None, view_options=None):
@@ -347,4 +350,7 @@ def denoise_volume(run, workspace, checkpoint='ema', gpu_id=None, on_line=None, 
     with exclusive_lock(run.run_dir/'.run.lock'):
         run_logged(command,run.run_dir/'logs/volume.log',run.run_dir,on_line=on_line)
     paths = validate_denoised_volume(folder,run.shape[1],run.shape[2])
-    return browse_tiffs(paths,'Denoised volume',context=run,**(view_options or {}))
+    info = inference_checkpoint_info(paths[0])
+    epoch_label = str(info['epoch']) if info['epoch'] is not None else 'unknown (not recorded)'
+    print('Checkpoint:', info['filename'] or checkpoint, '| training epoch:', epoch_label)
+    return browse_tiffs(paths,f'Denoised volume | {checkpoint} | epoch {epoch_label}',context=run,**(view_options or {}))
