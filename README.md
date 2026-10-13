@@ -9,6 +9,10 @@ full, even-angle and odd-angle TIFF stacks, estimates the center of rotation
 with TomoPy Vo, and manages reconstruction queues, training and inference.
 Reusable notebook code is in `workflow/src/krg_workflow`.
 
+The [training snooper](notebooks/Training_Snooper.ipynb) reads an active log in
+a separate kernel and produces the same loss-history plots without loading
+the model. Each refresh saves an independent snapshot.
+
 ## Setup and usage
 
 Follow [NERSC setup](docs/SETUP_NERSC.md) to install the two environments:

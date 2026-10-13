@@ -129,6 +129,10 @@ reference history at the next epoch; earlier epochs have no reference measuremen
 The v3.4 history cell also extracts the optional metrics into its CSV and adds two
 plot panels when they are present. Old L1/LCL-only logs still work.
 
+[Training_Snooper.ipynb](../notebooks/Training_Snooper.ipynb) displays the same
+plots concurrently in a separate kernel. It reads a bounded log snapshot and
+writes separate exports; model state and training outputs are not modified.
+
 ## Inference and feature assessment
 
 ```bash

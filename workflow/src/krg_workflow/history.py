@@ -5,6 +5,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import re
 import uuid
+import os
+import json
+import tempfile
+import contextlib
+import io
+from datetime import datetime, timezone
 
 
 def parse_training_history(log_path):
@@ -214,3 +220,47 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
             plt.close(fig)
     print('DONE: saved training history:', paths['png'])
     return dict(status='saved', epochs=len(rows), first_epoch=int(epochs[0]), last_epoch=int(epochs[-1]), best_l1=best_l1, best_lcl=best_lcl, metadata=metadata, paths={key: str(value) for key, value in paths.items()})
+
+
+def snapshot_training_history(log_path, output_root=None, moving_window=10, show=True):
+    """Plot a bounded copy of an append-only log in a separate snapshot directory.
+
+    Read through the size observed at open, excluding an unfinished final line.
+    Each call writes to a unique directory without modifying the source log,
+    training outputs or locks. No model or training process is loaded.
+    """
+    if type(moving_window) is not int or moving_window < 1:
+        raise ValueError('moving_window must be a positive integer.')
+    source = Path(log_path).expanduser().resolve()
+    captured = datetime.now(timezone.utc)
+    record = dict(log_path=str(source), captured_utc=captured.isoformat(timespec='seconds'))
+    try:
+        with source.open('rb') as stream:
+            observed = os.fstat(stream.fileno())
+            data = stream.read(observed.st_size)
+    except FileNotFoundError:
+        print('Training log not found:', source)
+        return dict(record, status='no_log', epochs=0, log_tail=[])
+
+    complete = data[:data.rfind(b'\n') + 1]
+    tail = complete.decode('utf-8', errors='replace').splitlines()[-20:]
+    record.update(observed_log_bytes=observed.st_size, captured_bytes=len(complete),
+                  omitted_tail_bytes=len(data) - len(complete),
+                  log_modified_utc=datetime.fromtimestamp(observed.st_mtime, timezone.utc).isoformat(timespec='seconds'),
+                  log_tail=[re.sub('\x1b\\[[0-?]*[ -/]*[@-~]', '', line) for line in tail])
+    root = Path(output_root).expanduser().resolve() if output_root is not None else source.parent/'training_snooper'
+    folder = root/(captured.strftime('%Y%m%dT%H%M%SZ') + '_' + uuid.uuid4().hex)
+    # A private copy keeps plotting independent of later producer writes.
+    with tempfile.TemporaryDirectory(prefix='krg-training-snapshot-') as temporary:
+        captured_log = Path(temporary)/'train.log'
+        captured_log.write_bytes(complete)
+        messages = io.StringIO()
+        with contextlib.redirect_stdout(messages):
+            result = plot_training_history(captured_log, folder, moving_window=moving_window, show=show)
+        print(messages.getvalue().replace(str(captured_log), str(source)), end='')
+    result.update(record)
+    if result['status'] == 'saved':
+        metadata_path = folder/'snapshot.json'
+        result['paths']['snapshot'] = str(metadata_path)
+        metadata_path.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+    return result

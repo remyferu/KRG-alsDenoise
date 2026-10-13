@@ -36,7 +36,7 @@ notebooks retain their original code; v3.4 is maintained directly.
 | `reconstruction.py` | ALS adapter, row chunks and stage validation |
 | `queue.py` | Queue execution and repair previews |
 | `denoising.py` | Configuration, checkpoint and output validation |
-| `history.py` | Log parsing and loss-history exports |
+| `history.py` | Log parsing, loss-history exports and concurrent log snapshots |
 | `cleanup.py` | Cleanup manifests and deletion |
 | `notebook_ui.py` | Widgets, linked zoom and live log callbacks |
 
@@ -84,6 +84,26 @@ krg-workflow run-queue /absolute/path/reconstruction_queue_v3.json
 
 Only `run-queue` performs reconstruction. These commands do not start training,
 delete outputs or apply queue repairs.
+
+## Training snooper
+
+Open [Training_Snooper.ipynb](../notebooks/Training_Snooper.ipynb) in a separate
+ALS kernel from the training notebook. Set `TRAIN_LOG` to the path printed by
+the training launcher, then run the snapshot cell. Rerun that cell to refresh;
+the optional last cell shows the captured log tail. PyTorch, checkpoints and
+GPU access are not required.
+
+`snapshot_training_history()` copies complete lines through the log size
+observed at open, then calls `plot_training_history()` on that private copy.
+It supports a growing log without acquiring training locks or modifying the
+source. Each refresh writes PNG, SVG, CSV and `snapshot.json` under a unique
+timestamp/UUID directory in `logs/training_snooper/` by default. `SNAPSHOT_ROOT`
+selects an alternate destination. The training notebook's own exports are
+unchanged. Missing logs or incomplete L1/LCL summaries produce a status message.
+
+Snapshot metadata records capture time, observed log size and the last parsed
+epoch. Total loss and the logged stopping curve appear when available. Plot
+smoothing remains independent of the training early-stopping policy.
 
 ## Notebook maintenance and checks
 
