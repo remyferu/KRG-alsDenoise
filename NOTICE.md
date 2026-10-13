@@ -4,6 +4,8 @@ The `denoise` package, data importers, baseline configuration, environment files
 and original Sphinx documentation were adapted from
 [tomography/Noise2Inverse360](https://github.com/tomography/Noise2Inverse360),
 commit `d41be08cbbea02903bb522f6c0a3df75500f38c5`.
+The upstream package metadata lists Austin Yunker as author. Remy Feru
+maintains the KRG adaptation.
 Their Argonne license is retained in
 `third_party/Noise2Inverse360_LICENSE.txt` and existing source headers.
 The root MIT license does not replace those license terms.

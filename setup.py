@@ -4,6 +4,8 @@ setup(
     name = 'denoise',
     author = 'Austin Yunker',
     author_email = 'ayunker@anl.gov',
+    maintainer = 'Remy Feru',
+    maintainer_email = 'remy.feru@utexas.edu',
     description = 'KRG ALS CT denoising: Noise2Inverse with optional NAFNet 2.5D.',
     packages = find_packages(),
     entry_points={'console_scripts': ['denoise = denoise.__main__:main'],},
