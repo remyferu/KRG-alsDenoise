@@ -1,12 +1,13 @@
 # NAFNet25D architecture
 
 [SVG vector diagram](nafnet25d-architecture.svg) ·
-[PNG, 3840 × 5760](nafnet25d-architecture.png) ·
+[PNG, 3840 × 6080](nafnet25d-architecture.png) ·
 [Zoom and pan viewer](nafnet25d-architecture.html)
 
 The diagram documents `denoise/nafnet25d.py` with the repository defaults:
 five input slices, 32-channel fused features, a four-block detail branch,
-two encoder and decoder levels, and six bottleneck blocks. Tensor dimensions
+two encoder and decoder levels, six bottleneck blocks and distance-aware
+axial gates. Tensor dimensions
 show 256 × 256 input patches. Arbitrary dimensions use replicate padding and
 output cropping. Actual run options are recorded in the training YAML and
 checkpoint's `model_spec`.
@@ -14,7 +15,9 @@ checkpoint's `model_spec`.
 The poster contains the full network graph, a per-neighbor axial fusion
 expansion, both updates within a NAFBlock, and the paired training objective.
 It distinguishes additive skips from concatenation and identifies initialization
-and precision behavior. The parameter total is 989,745 for these defaults.
+and precision behavior. The parameter total is 989,777 for these defaults,
+including 32 distance-bias parameters. The training panel documents fixed
+held-out validation, plateau LR reduction, EMA and total-loss stopping.
 
 Open the HTML file in a browser with the SVG and PNG beside it. The viewer
 supports zoom controls and drag-to-pan; the SVG remains sharp at any scale.

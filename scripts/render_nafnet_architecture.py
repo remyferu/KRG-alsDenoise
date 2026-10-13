@@ -12,7 +12,7 @@ from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle, Rectangl
 
 ROOT = Path(__file__).resolve().parents[1]
 DESTINATION = ROOT/'docs/figures'
-W, H = 2400, 3600
+W, H = 2400, 3800
 COLORS = dict(ink='#172b42', muted='#54687b', line='#50657a', blue='#2864a0',
               blue_bg='#eef5fc', teal='#087f85', teal_bg='#e9f7f5',
               gold='#ac7311', gold_bg='#fff6df', coral='#b65437', coral_bg='#fff0e9',
@@ -27,6 +27,7 @@ def source_model():
     model = module.NAFNet25D()
     counts = {name: sum(p.numel() for p in child.parameters())
               for name, child in model.named_children()}
+    counts['distance_bias'] = model.distance_bias.numel()
     import torch
     with torch.device('meta'):
         shape_model = module.NAFNet25D()
@@ -52,12 +53,12 @@ def source_model():
     with torch.inference_mode():
         output = shape_model(torch.empty(2, 5, 255, 257, device='meta'))
     assert tuple(output.shape) == (2, 1, 255, 257)
-    assert sum(counts.values()) == 989745
+    assert sum(counts.values()) == 989777
     assert len(model.detail) == 4 and len(model.middle) == 6
     return dict(source='denoise/nafnet25d.py', source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 parameters=sum(counts.values()), module_parameters=counts,
                 default_options=dict(n_slices=5, width=32, stem_width=16, detail_blocks=4,
-                                     encoder_blocks=[2, 2], middle_blocks=6, decoder_blocks=[2, 2]),
+                                     encoder_blocks=[2, 2], middle_blocks=6, decoder_blocks=[2, 2], distance_aware=True),
                 default_module_output_shapes=shapes,
                 shape_check=dict(input=[2, 5, 255, 257], output=list(output.shape), device='meta'),
                 verification='Parameter inspection and shape propagation only; no model training.')
@@ -69,7 +70,7 @@ def render():
     plt.rcParams.update({'font.family': 'DejaVu Sans', 'svg.fonttype': 'path',
                          'svg.hashsalt': 'krg-nafnet25d-architecture',
                          'savefig.facecolor': 'white'})
-    fig = plt.figure(figsize=(24, 36), dpi=100)
+    fig = plt.figure(figsize=(W/100, H/100), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set(xlim=(0, W), ylim=(H, 0))
     ax.axis('off')
@@ -114,10 +115,10 @@ def render():
 
     text(75, 55, 'NAFNet25D', size=65, weight='bold')
     text(75, 133, 'Micro-CT denoising with learned axial fusion and a full-resolution detail path', size=31)
-    text(75, 182, 'KRG-alsDenoise  /  implemented architecture  /  repository defaults, not a specific trained checkpoint', size=22, color='muted')
+    text(75, 182, 'KRG-alsDenoise v3.5  /  implemented architecture  /  repository defaults, not a specific trained checkpoint', size=22, color='muted')
     for x, title, body, theme in (
         (75, '5 input slices → 1 output', 'K is configurable: odd values ≥ 3', 'coral'),
-        (655, '989,745 parameters', '18 NAFBlocks · widths 32 / 64 / 128', 'blue'),
+        (655, '989,777 parameters', '18 NAFBlocks · widths 32 / 64 / 128', 'blue'),
         (1235, '256 × 256 training patches', 'B = 4 per GPU in the default preset', 'teal'),
         (1815, 'Two downsampling stages', 'Context reaches 64 × 64; detail stays 256 × 256', 'violet')):
         box(x, 234, 510, 100, title, [body], theme=theme, size=18, title_size=24)
@@ -180,16 +181,16 @@ def render():
     text(1980, 1625, 'Final 3 × 3 head starts at zero.', size=20, color='muted')
 
     panel(1740, 440)
-    section(1770, '02', 'Learned axial fusion', 'One shared gate is reused for all K − 1 neighboring slices. All spatial operations below preserve P × Q.')
+    section(1770, '02', 'Distance-aware axial fusion', 'Shared convolutional gates plus learned per-distance channel biases. Spatial operations preserve P × Q.')
     box(80, 1870, 350, 169, 'Center Fc + neighbor Fi', ['Both: [B, 16, P, Q]', 'From the same shared 3 × 3 stem', 'i ≠ c; K = 5 gives four neighbors'], theme='coral', size=21, title_size=24)
     box(480, 1870, 265, 169, 'Feature difference', ['Δi = Fi − Fc', '[B, 16, P, Q]'], theme='coral', size=22, title_size=24)
     box(795, 1870, 330, 169, 'Gate input', ['Concatenate [Fc, Fi, Δi]', '16 + 16 + 16 = 48 channels', '[B, 48, P, Q]'], theme='coral', size=21)
-    box(1175, 1870, 570, 169, 'Spatial / channel gate gi', ['Depthwise 3 × 3: 48 → 48, groups = 48', 'Pointwise 1 × 1: 48 → 16, then sigmoid', 'gi: [B, 16, P, Q], values between 0 and 1'], theme='coral', size=22, title_size=25)
+    box(1175, 1870, 570, 169, 'Spatial / channel gate gi', ['Depthwise 3 × 3: 48 → 48, groups = 48', 'Pointwise 1 × 1: 48 → 16; add bd; sigmoid', 'gi = σ(logits + b|i−c|): [B, 16, P, Q]'], theme='coral', size=22, title_size=25)
     box(1795, 1870, 525, 169, 'Average gated corrections', ['Multiply gi ⊙ Δi for each neighbor', 'R = Σᵢ≠c (gi ⊙ Δi) / (K − 1)', 'Concatenate [Fc, R]; 1 × 1 Conv → 32'], theme='coral', size=22, title_size=25)
     for a,b in ((430,480),(745,795),(1125,1175),(1745,1795)):
         line([(a,1954),(b,1954)],color='coral')
-    text(90, 2075, 'Gate pointwise bias starts at −2 to initially limit neighbor influence; the exact gate also depends on features and weights.', size=23)
-    text(90, 2120, 'No axial-distance embedding is implemented. Neighbor order is interchangeable; only the center slice has a distinct role.', size=23, color='muted')
+    text(90, 2075, 'Distance bias bd: [K//2, 16], initialized to −log(d). Near and far neighbors learn separate channel biases; ±d share weights.', size=23)
+    text(90, 2120, 'For K = 5, the bias table has 32 parameters. The gate pointwise bias starts at −2; corrections are still averaged over K − 1.', size=23, color='muted')
 
     panel(2220, 785)
     section(2250, '03', 'Inside every NAFBlock', 'C = 32, 64 or 128; spatial size h × w is unchanged. Each block has two independently scaled residual updates.')
@@ -228,26 +229,33 @@ def render():
     line([(180,2838),(180,2920),(1900,2920),(1900,2867)],color='violet',dashed=True)
     text(90, 2960, 'LayerNorm uses FP32 with ε = 10⁻⁶; β and γ have shape [1,C,1,1]. NAFBlocks use multiplication; axial gates use sigmoid.', size=22, color='muted')
 
-    section(3050, '04', 'Training context and implementation details', 'Both directions use the same network weights. The loss is computed against the opposite reconstruction split’s center slice.')
-    box(80, 3150, 1120, 294, 'Symmetric paired training', [
+    section(3050, '04', 'Training, validation and inference weights', 'Both training directions share weights. Fixed validation and EMA use the same paired center-slice objective.')
+    box(80, 3150, 1120, 420, 'Symmetric paired training + fixed validation', [
         'Even-angle stack A → fθ(A) → compare with odd center Bc',
         'Odd-angle stack B → fθ(B) → compare with even center Ac',
         'L = ½(L1(A→Bc) + L1(B→Ac)) + ½λ(LCL(fθ(A)) + LCL(fθ(B)))',
         'λ = 0 during warmup; λ = 0.01 after warmup (default 2,000 updates).',
         'LCL = mean flat-region |Laplacian| / (mean edge-region |Laplacian| + ε).',
-        'The detached 80th-percentile mask separates flat / edge responses.'
+        'The detached 80th-percentile mask separates flat / edge responses.',
+        'Validation: last 10% of axial planes; up to 128 distinct, fixed crops.',
+        'No shared input planes; normalization uses training planes only.',
+        'EMA: decay 0.999 after warmup; best weights selected by held-out total.'
     ], theme='gold', size=23, title_size=27)
-    box(1250, 3150, 1070, 294, 'Parameters, precision and initialization', [
-        'Axial stem + gate + fusion: 2,480  ·  detail branch: 32,896',
+    box(1250, 3150, 1070, 420, 'Parameters, precision and optimization', [
+        'Axial stem + gate + fusion + distance bias: 2,512  ·  detail: 32,896',
         'Context encoder–decoder: 952,000  ·  residual head: 2,369',
         'Each NAFBlock: 7C² + 33C parameters; 18 blocks in total.',
         'β = γ = 0 and the final head is zero: initial output equals Xc.',
-        'BF16 autocast on supported GPUs; LayerNorm and final addition use FP32.',
-        'Adam: lr = 0.001; gradient norm clipped to 1.0; no LR scheduler.'
+        'BF16 autocast; LayerNorm, EMA weights and final addition use FP32.',
+        'Adam: initial lr = 0.001; gradient norm clipped to 1.0.',
+        'Plateau: halve LR after patience 25; cooldown 5; minimum 1e−5.',
+        'Schedule monitors the raw model’s trailing 10-epoch total-loss mean.',
+        'After an LR reduction, allow 30 refinement epochs before stopping.'
     ], theme='blue', size=23, title_size=27)
-    text(90, 3472, 'Stopping: trailing 10-epoch evaluation total-loss mean after warmup; min_delta = 0.001; patience = 100 in notebook defaults.', size=23)
-    text(90, 3510, 'L2 / SSIM are reporting metrics; raw L1 / LCL / EDGE checkpoints remain separate. Evaluation resamples training data; metrics use the final GPU rank.', size=21, color='muted')
-    text(90, 3553, 'Source: denoise/nafnet25d.py, denoise/train.py, denoise/loss.py, workflow/src/krg_workflow/presets.py  ·  NAFBlock adapted from MEGVII NAFNet (MIT).', size=20, color='muted')
+    text(90, 3615, 'Stopping: trailing 10-epoch held-out total-loss mean after warmup; min_delta = 0.001; patience = 100. LR changes do not reset loss patience.', size=22)
+    text(90, 3660, 'Metrics use sample-weighted sums across all GPU ranks. L2 / SSIM report only; raw L1 / LCL / EDGE and EMA checkpoints remain separate.', size=22, color='muted')
+    text(90, 3705, 'EMA inference uses the same architecture with averaged weights. Model and resume specification version 2; earlier NAFNet checkpoints are incompatible.', size=21, color='muted')
+    text(90, 3750, 'Source: denoise/{nafnet25d,train,loss,validation,training_controls}.py; workflow/src/krg_workflow/presets.py  ·  NAFBlock: MEGVII NAFNet (MIT).', size=20, color='muted')
 
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()

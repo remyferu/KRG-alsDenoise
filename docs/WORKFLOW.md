@@ -1,6 +1,6 @@
 # Workflow development
 
-The maintained notebook is `notebooks/Noise2Inverse360_HPC_v3.4.ipynb`.
+The maintained notebook is `notebooks/Noise2Inverse360_HPC_v3.5.ipynb`.
 Its action cells call `krg-ct-workflow`, a separate Python 3.8 package installed
 in the ALS environment. The `denoise` backend runs PyTorch in n2i.
 
@@ -19,7 +19,7 @@ example reads shared presets directly from `workflow/src`.
 
 Stop jobs that use the checkout before updating it, then restart the notebook
 kernel. Cell 1 reports the installed package version and source path. Earlier
-notebooks retain their original code; v3.4 is maintained directly.
+notebooks retain their original code; v3.5 is maintained directly.
 
 ## Modules
 
@@ -56,18 +56,26 @@ and settings identity cannot be changed under the same run label.
 
 Backend configuration, checkpoint loading and dataset/loader construction are
 in `denoise/configuration.py`, `checkpoints.py` and `training_setup.py`.
-Optimization losses, optimizer, warmup and raw checkpoint selection retain
-their original behavior. `denoise/early_stopping.py` separately monitors the
-post-warmup moving average of evaluation total loss. Its state is saved in the
-resume checkpoint. Training and evaluation share `paired_objective()` from
-`denoise/loss.py`; reporting metrics do not control stopping.
+`denoise/validation.py` records disjoint axial partitions and fixed validation
+crops; normalization uses training planes only. Evaluation shards do not pad
+or repeat sample indices. `denoise/evaluation.py` forwards the plain module
+rather than its DDP wrapper, so uneven and empty evaluation shards avoid DDP
+forward collectives. Sample-weighted sums and counts are reduced across ranks.
+
+`denoise/training_controls.py` manages plateau LR reduction, a refinement
+interval and FP32 EMA weights. `denoise/early_stopping.py` monitors the raw
+model's post-warmup total-loss mean. Training and evaluation share
+`paired_objective()` from `denoise/loss.py`; reporting metrics do not control
+stopping. Scheduler, monitor, EMA, validation plan and warmup state are stored
+in version-2 resume checkpoints. LR changes do not reset loss patience.
 
 ## Compatibility
 
-- Schema-4 plans from v3.0–v3.4 retain their geometry, output names and identity.
+- Schema-4 reconstruction plans from v3.0–v3.5 retain their geometry, output names and identity.
 - Queue schema 1, entry IDs, stage signatures, completion files and lock names are unchanged.
-- Existing training YAML, normalization, checkpoints and metric history remain readable.
-  Legacy resume checkpoints start a fresh early-stopping window; new ones restore it.
+- v3.5 NAFNet and resume checkpoints are incompatible with previous releases.
+  Start a new training label; existing reconstruction stacks need no conversion.
+- Existing metric logs remain readable by history plotting and the snooper.
 - Cleanup previews include the generated `auto_cor_vo` directory.
 
 ## Terminal commands
@@ -104,6 +112,8 @@ unchanged. Missing logs or incomplete L1/LCL summaries produce a status message.
 Snapshot metadata records capture time, observed log size and the last parsed
 epoch. Total loss and the logged stopping curve appear when available. Plot
 smoothing remains independent of the training early-stopping policy.
+v3.5 logs add EMA evaluation total and learning rate. The snooper displays
+the same optional EMA overlay and LR panel as notebook history exports.
 
 ## Notebook maintenance and checks
 
@@ -122,9 +132,10 @@ The full suite requires backend dependencies. For workflow checks alone, use
 `workflow/tests` as the discovery directory. Tests cover temporary scans and
 TIFFs, log parsing, mocked subprocess/ALS calls and inference. Training tests
 are disabled by default. Python 3.8 compatibility is checked statically.
-Stopping-policy tests use scalar loss sequences, serialized monitor state and
-mocked distributed decisions without training a model. Local checks do not
-verify a fresh NERSC installation or ALS reconstruction.
+Policy checks use scalar loss sequences, serialized state and manual EMA
+weight snapshots. A three-process CPU/Gloo inference check includes an empty
+evaluation shard. Local checks do not train a model or verify NERSC/NCCL
+throughput, a fresh NERSC installation or ALS reconstruction.
 
 Historical documentation and environment exports are under `docs/legacy/`
 and `envs/legacy/`. See [license notices](../NOTICE.md) for attribution.

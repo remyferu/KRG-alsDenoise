@@ -8,10 +8,16 @@ Noise2Inverse model training using distributed data parallel (DDP).
 import os
 import time
 import yaml
+import json
+from pathlib import Path
 from denoise.configuration import read_config
-from denoise.checkpoints import initial_checkpoint as load_initial_checkpoint
-from denoise.training_setup import training_dataset, training_loader
+from denoise.checkpoints import initial_checkpoint as load_initial_checkpoint, save_checkpoint
+from denoise.training_setup import training_dataset, training_loader, validation_loader
 from denoise.early_stopping import MovingAverageEarlyStopping
+from denoise.training_controls import (plateau_options, ema_options, PlateauController,
+                                       ModelEMA, update_training_controls)
+from denoise.validation import EpochMetrics, validation_options
+from denoise.evaluation import evaluate_pairs
 import datetime
 import numpy as np
 import torch
@@ -24,7 +30,6 @@ from denoise.loss import LCL, paired_objective
 from denoise.reference_metrics import (SSIMLoss, resolve_ssim_data_range,
                                        paired_reference_metrics, save_reference_history)
 from denoise.utils import save2img
-from denoise.eval import laplacian_score_batch
 from denoise import log
 
 
@@ -36,6 +41,9 @@ def run(args):
 
     params, mode = read_config(args)
     stopping = MovingAverageEarlyStopping.from_config(params['train'])
+    lr_policy = plateau_options(params['train'])
+    ema_policy = ema_options(params['train'])
+    validation_options(params['train'], mode)
 
     START_TIME = time.time()
 
@@ -112,6 +120,19 @@ def run(args):
     log.info("Loading data into CPU memory, it will take a while ...")
 
     ds_train = training_dataset(params, args.config, mode)
+    fixed_plan = getattr(ds_train, 'validation_plan', None)
+    if getattr(args, 'resume', False) and initial_checkpoint.get('validation_plan') != fixed_plan:
+        raise ValueError('Validation geometry, data or normalization changed. Use a new training output directory.')
+    if len(ds_train) < world_size:
+        raise ValueError('Training dataset must provide at least one sample per GPU rank.')
+    if rank == 0:
+        if fixed_plan is not None:
+            Path(odir, 'validation.json').write_text(json.dumps(fixed_plan, indent=2)+'\n', encoding='utf-8')
+            log.info('Fixed validation: %d patches; held-out planes %s; no overlapping training stacks.' %
+                     (len(fixed_plan['coordinates']), fixed_plan['validation_planes']))
+            log.info('Metric aggregation: scope=all_ranks; weighting=patches; validation=fixed_held_out')
+        else:
+            log.info('Metric aggregation: scope=all_ranks; weighting=patches; validation=training_resampling')
 
     # Fix the reference SSIM intensity span for every batch/epoch and future resumes.
     ssim_range_tensor = torch.zeros(1, dtype=torch.float64, device='cuda')
@@ -138,6 +159,7 @@ def run(args):
     torch.distributed.barrier()
 
     train_sampler, dl_train = training_loader(params, ds_train, mode)
+    dl_val = validation_loader(params, ds_train, dl_train, rank, world_size)
 
     log.info("Loaded %d samples into CPU memory for training." % len(ds_train))
 
@@ -159,7 +181,7 @@ def run(args):
     # training state (overwritten on --resume)
     model_updates = 0
     start_epoch = 1
-    continue_warmup = True
+    continue_warmup = warmup > 0
     train_loss, val_loss = [], []
     edge_values = []
     train_lcl_loss, val_lcl_loss = [], []
@@ -191,6 +213,8 @@ def run(args):
         edge_values     = ckpt['edge_values']
         reference_metric_history = ckpt.get('reference_metric_history', [])
         continue_warmup = ckpt['continue_warmup']
+        if ckpt.get('warmup_updates') != warmup:
+            raise ValueError('Warmup length changed. Use a new training label or output directory.')
         if rank == world_size - 1 and not restored:
             log.info('Early-stopping state absent or policy changed; collecting a fresh '
                      'post-warmup window and resetting patience. Raw checkpoints are retained.')
@@ -207,6 +231,19 @@ def run(args):
     else:
         log.info('Initializing model from scratch')
 
+    controller = PlateauController(optimizer, lr_policy, stopping.min_delta, stopping.window)
+    if getattr(args, 'resume', False):
+        controller.load_state_dict(ckpt.get('lr_scheduler_state'))
+    ema = ModelEMA(model.module, ema_policy['decay']) if ema_policy['enabled'] else None
+    best_ema_total, best_ema_epoch = np.inf, 0
+    if ema is not None and getattr(args, 'resume', False):
+        if ema.load_state_dict(ckpt.get('ema_state')):
+            best_ema_total, best_ema_epoch = ckpt.get('best_ema_total', np.inf), ckpt.get('best_ema_epoch', 0)
+        else:
+            log.info('EMA state absent or decay changed; seeding a new average from resumed weights.')
+    if rank == world_size-1:
+        log.info('Learning-rate schedule: %s | EMA: %s' % (lr_policy, ema_policy))
+
     if rank == world_size - 1:
         log.info('Early-stopping monitor: metric=eval_total_loss; window=%d; '
                  'min_delta=%.12g absolute objective units; '
@@ -216,9 +253,8 @@ def run(args):
     # start training
     for epoch in range(start_epoch, params['train']['maxep'] + 1):
 
-        step_losses, step_val_losses, step_lcl_loss, step_lcl_val_loss, step_edge_values = [], [], [], [], []
-        step_l2, step_val_l2, step_ssim, step_val_ssim = [], [], [], []
-        step_total_losses, step_val_total_losses = [], []
+        train_metrics = EpochMetrics(('total', 'l1', 'lcl', 'l2', 'ssim'), 'cuda')
+        warming_epoch = model_updates < warmup
 
         tick_ep = time.time()
 
@@ -243,7 +279,7 @@ def run(args):
                 loss_view1 = criterion(pred_view1.squeeze(dim=1), Y_mb_dev[:, center_idx])
                 loss_view2 = criterion(pred_view2.squeeze(dim=1), X_mb_dev[:, center_idx])
 
-            if model_updates <= warmup:
+            if model_updates < warmup:
                 loss_lcl1 = torch.tensor(0.)
                 loss_lcl2 = torch.tensor(0.)
                 loss = paired_objective(loss_view1, loss_view2)
@@ -261,71 +297,39 @@ def run(args):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-
-            step_total_losses.append(loss.detach().cpu().numpy())
-            step_losses.append((loss_view1 + loss_view2).detach().cpu().numpy())
-            step_lcl_loss.append((loss_lcl1 + loss_lcl2).detach().cpu().numpy())
-            if rank == world_size - 1:
-                l2_reference, ssim_reference = paired_reference_metrics(
-                    pred_view1, pred_view2, X_mb_dev, Y_mb_dev, mode, center_idx, reference_ssim)
-                step_l2.append(l2_reference.item())
-                step_ssim.append(ssim_reference.item())
             model_updates += 1
+            if ema is not None:
+                ema.update(model.module, model_updates, warmup)
+            l2_reference, ssim_reference = paired_reference_metrics(
+                pred_view1, pred_view2, X_mb_dev, Y_mb_dev, mode, center_idx, reference_ssim)
+            train_metrics.add(X_mb_dev.shape[0],
+                              total=loss, l1=loss_view1+loss_view2, lcl=loss_lcl1+loss_lcl2,
+                              l2=l2_reference, ssim=ssim_reference)
             log_every = int(params['train'].get('log_every', 50))
             if rank == world_size - 1 and log_every > 0 and (
                     batch_index == 1 or batch_index % log_every == 0 or batch_index == len(dl_train)):
                 log.info('[Progress] epoch %d train batch %d/%d | updates %d' %
                          (epoch, batch_index, len(dl_train), model_updates))
 
-        model.eval()
-        with torch.no_grad():
-            # ---- validation loop ----
-            for X_mb, Y_mb in dl_train:
-                X_mb_dev = X_mb.cuda()
-                Y_mb_dev = Y_mb.cuda()
-
-                pred_view1 = forward_model(model, X_mb_dev, precision)
-                pred_view2 = forward_model(model, Y_mb_dev, precision)
-
-                if mode == '3d':
-                    loss_view1 = criterion(pred_view1, Y_mb_dev)
-                    loss_view2 = criterion(pred_view2, X_mb_dev)
-                    D = pred_view1.shape[2]
-                    loss_lcl1 = criterion_lcl(pred_view1[:, :, D // 2]) * beta
-                    loss_lcl2 = criterion_lcl(pred_view2[:, :, D // 2]) * beta
-                    # Edge score on center slice
-                    lap_score = (laplacian_score_batch(pred_view1[:, :, D // 2].cpu()) +
-                                 laplacian_score_batch(pred_view2[:, :, D // 2].cpu()))
-                else:
-                    loss_view1 = criterion(pred_view1.squeeze(dim=1), Y_mb_dev[:, int(n_slices // 2)])
-                    loss_view2 = criterion(pred_view2.squeeze(dim=1), X_mb_dev[:, int(n_slices // 2)])
-                    loss_lcl1 = criterion_lcl(pred_view1) * beta
-                    loss_lcl2 = criterion_lcl(pred_view2) * beta
-                    lap_score = laplacian_score_batch(pred_view1.cpu()) + laplacian_score_batch(pred_view2.cpu())
-
-                loss = loss_view1 + loss_view2
-                if model_updates > warmup:
-                    total_loss = paired_objective(loss_view1, loss_view2, loss_lcl1, loss_lcl2)
-                else:
-                    total_loss = paired_objective(loss_view1, loss_view2)
-                step_val_total_losses.append(total_loss.detach().cpu().numpy())
-                step_edge_values.append(lap_score)
-                step_val_losses.append(loss.detach().cpu().numpy())
-                loss_lcl = loss_lcl1 + loss_lcl2
-                step_lcl_val_loss.append(loss_lcl.cpu().numpy())
-                if rank == world_size - 1:
-                    l2_reference, ssim_reference = paired_reference_metrics(
-                        pred_view1, pred_view2, X_mb_dev, Y_mb_dev, mode, center_idx, reference_ssim)
-                    step_val_l2.append(l2_reference.item())
-                    step_val_ssim.append(ssim_reference.item())
+        train_values, train_count = train_metrics.reduce()
+        val_values, val_count, preview = evaluate_pairs(model.module, dl_val, mode, precision, 'cuda',
+            criterion, criterion_lcl, beta, model_updates >= warmup, reference_ssim)
+        ema_values = None
+        if ema is not None and ema.num_updates > 0 and epoch % ema_policy['evaluate_every'] == 0:
+            ema_values, _, _ = evaluate_pairs(ema.model, dl_val, mode, precision, 'cuda',
+                criterion, criterion_lcl, beta, model_updates >= warmup, reference_ssim, reference=False)
+        local_stop, reduced = update_training_controls(stopping, controller, epoch,
+                                                       val_values['total'], warming_epoch)
+        warmup_finished = model_updates >= warmup and continue_warmup
+        if warmup_finished:
+            continue_warmup = False
 
         ep_time = time.time() - tick_ep
 
         # Early stopping: rank world_size-1 decides, broadcasts to all ranks
         stop_tensor = torch.zeros(1, dtype=torch.int32, device='cuda')
         if rank == world_size - 1:
-            # The transition epoch may contain warmup batches and is excluded.
-            if stopping.update(epoch, np.mean(step_val_total_losses), warming_up=continue_warmup):
+            if local_stop:
                 stop_tensor.fill_(1)
         torch.distributed.broadcast(stop_tensor, src=world_size - 1)
         early_stop = bool(stop_tensor.item())
@@ -336,85 +340,78 @@ def run(args):
             continue
 
         log.info('Epoch %d' % epoch)
-        log.info('[Train] Total loss: %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_total_losses), step_total_losses[0], step_total_losses[-1], ep_time))
-        log.info('[Val]   Total loss: %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_val_total_losses), step_val_total_losses[0], step_val_total_losses[-1], ep_time))
-        log.info('[Train] L1 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_losses), step_losses[0], step_losses[-1], ep_time))
-        log.info('[Train] LCL loss:   %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_lcl_loss), step_lcl_loss[0], step_lcl_loss[-1], ep_time))
-        log.info('[Val]   L1 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_val_losses), step_val_losses[0], step_val_losses[-1], ep_time))
-        log.info('[Val]   LCL loss:   %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_lcl_val_loss), step_lcl_val_loss[0], step_lcl_val_loss[-1], ep_time))
-        log.info('[Val] EDGE Value:   %.4f, %.4f => %.4f, rate: %.2fs/ep' % (
-            np.mean(step_edge_values), step_edge_values[0], step_edge_values[-1], ep_time))
-        log.info('[Train] L2 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_l2), step_l2[0], step_l2[-1], ep_time))
-        log.info('[Train] SSIM loss:  %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_ssim), step_ssim[0], step_ssim[-1], ep_time))
-        log.info('[Val]   L2 loss:    %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_val_l2), step_val_l2[0], step_val_l2[-1], ep_time))
-        log.info('[Val]   SSIM loss:  %.6f, %.6f => %.6f, rate: %.2fs/ep' % (
-            np.mean(step_val_ssim), step_val_ssim[0], step_val_ssim[-1], ep_time))
+        for stage, values, count in (('Train', train_values, train_count), ('Val', val_values, val_count)):
+            for key, label in (('total', 'Total loss'), ('l1', 'L1 loss'), ('lcl', 'LCL loss'),
+                               ('l2', 'L2 loss'), ('ssim', 'SSIM loss')):
+                log.info('[%s] %s: %.6f, samples=%d, rate: %.2fs/ep' %
+                         (stage, label, values[key], count, ep_time))
+        log.info('[Val] EDGE Value: %.6f' % val_values['edge'])
+        log.info('[LearningRate] lr: %.12g; reduced: %s' % (optimizer.param_groups[0]['lr'], reduced))
+        if ema_values is not None:
+            log.info('[EMA] Total loss: %.6f; averaged updates: %d' % (ema_values['total'], ema.num_updates))
 
-        reference_metric_history.append(dict(epoch=epoch, train_l2=float(np.mean(step_l2)),
-            eval_l2=float(np.mean(step_val_l2)), train_ssim=float(np.mean(step_ssim)),
-            eval_ssim=float(np.mean(step_val_ssim)), ssim_data_range=ssim_data_range,
+        reference_metric_history.append(dict(epoch=epoch, train_l2=train_values['l2'],
+            eval_l2=val_values['l2'], train_ssim=train_values['ssim'],
+            eval_ssim=val_values['ssim'], ssim_data_range=ssim_data_range,
             ssim_window_size=11, mode=mode))
         save_reference_history(os.path.join(odir, 'results', 'reference_metrics.csv'), reference_metric_history)
 
-        train_loss.append(np.mean(step_losses))
-        val_loss.append(np.mean(step_val_losses))
-        train_lcl_loss.append(np.mean(step_lcl_loss))
-        val_lcl_loss.append(np.mean(step_lcl_val_loss))
-        edge_values.append(np.mean(step_edge_values))
+        train_loss.append(train_values['l1'])
+        val_loss.append(val_values['l1'])
+        train_lcl_loss.append(train_values['lcl'])
+        val_lcl_loss.append(val_values['lcl'])
+        edge_values.append(val_values['edge'])
 
         # Save the best model with the lowest lcl loss
-        if np.mean(step_lcl_val_loss) < best_lcl_loss:
-            best_lcl_loss = np.mean(step_lcl_val_loss)
+        if val_values['lcl'] < best_lcl_loss:
+            best_lcl_loss = val_values['lcl']
             best_lcl_epoch = epoch
             mdl_fname = f"{odir}/best_lcl_model.pth"
-            torch.save({
+            save_checkpoint({
                 'model_spec': deepcopy(spec),
                 'model_state_dict': deepcopy(model.module.state_dict()),
                 'optimizer_state_dict': deepcopy(optimizer.state_dict())
             }, mdl_fname)
 
         # Save the best model with the lowest val loss
-        if np.mean(step_val_losses) < best_val_loss:
-            best_val_loss = np.mean(step_val_losses)
+        if val_values['l1'] < best_val_loss:
+            best_val_loss = val_values['l1']
             best_val_epoch = epoch
             mdl_fname = f"{odir}/best_val_model.pth"
-            torch.save({
+            save_checkpoint({
                 'model_spec': deepcopy(spec),
                 'model_state_dict': deepcopy(model.module.state_dict()),
                 'optimizer_state_dict': deepcopy(optimizer.state_dict())
             }, mdl_fname)
 
         # Save the best model with the highest edge value
-        if np.mean(step_edge_values) > best_edge:
-            best_edge = np.mean(step_edge_values)
+        if val_values['edge'] > best_edge:
+            best_edge = val_values['edge']
             best_edge_epoch = epoch
             mdl_fname = f"{odir}/best_edge_model.pth"
-            torch.save({
+            save_checkpoint({
                 'model_spec': deepcopy(spec),
                 'model_state_dict': deepcopy(model.module.state_dict()),
                 'optimizer_state_dict': deepcopy(optimizer.state_dict())
             }, mdl_fname)
 
+        if ema_values is not None and not warming_epoch and ema_values['total'] < best_ema_total:
+            best_ema_total, best_ema_epoch = ema_values['total'], epoch
+            save_checkpoint(dict(model_spec=deepcopy(spec), model_state_dict=deepcopy(ema.model.state_dict()),
+                            epoch=epoch, eval_total=best_ema_total, ema_decay=ema.decay,
+                            validation_plan=deepcopy(fixed_plan)), f'{odir}/best_ema_model.pth')
+
         # Warm up period
-        if model_updates > warmup and continue_warmup:
+        if warmup_finished:
             best_edge, best_lcl_loss = 0, np.inf
             best_edge_epoch, best_lcl_epoch = 0, 0
-            continue_warmup = False
 
         CRNT_TIME = time.time()
         log.info("[Info]  Training Time: %.2f seconds" % (CRNT_TIME - START_TIME))
 
         # option to view the denoising process during training
-        if epoch % 5 == 0:
+        if epoch % 5 == 0 and preview is not None:
+            pred_view1, pred_view2, X_mb_dev, Y_mb_dev = preview
             ridx = np.random.randint(pred_view1.shape[0])
             if mode == '3d':
                 D = pred_view1.shape[2]
@@ -478,7 +475,8 @@ def run(args):
             plt.close()
 
         # Save resume checkpoint (overwritten each epoch; enables --resume after interruption)
-        torch.save({
+        save_checkpoint({
+            'training_version': 2,
             'model_spec': deepcopy(spec),
             'model_state_dict': deepcopy(model.module.state_dict()),
             'optimizer_state_dict': deepcopy(optimizer.state_dict()),
@@ -497,8 +495,14 @@ def run(args):
             'edge_values': edge_values,
             'reference_metric_history': reference_metric_history,
             'continue_warmup': continue_warmup,
+            'warmup_updates': warmup,
             'epochs_since_improvement': stopping.epochs_since_improvement,
             'early_stopping_state': stopping.state_dict(),
+            'validation_plan': deepcopy(fixed_plan),
+            'lr_scheduler_state': controller.state_dict(),
+            'ema_state': None if ema is None else ema.state_dict(),
+            'best_ema_total': best_ema_total,
+            'best_ema_epoch': best_ema_epoch,
         }, f"{odir}/resume.pth")
 
         if early_stop:

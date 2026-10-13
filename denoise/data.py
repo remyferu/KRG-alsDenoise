@@ -2,12 +2,14 @@ import numpy as np
 from torch.utils.data import Dataset
 import albumentations as A
 import yaml, sys
+from pathlib import Path
 import warnings
 import torch
 import torch.nn as nn
 
 from denoise import log
 from denoise import tiffs
+from denoise.validation import validation_options, axial_split, validation_plan
 
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union, Literal
@@ -44,6 +46,7 @@ class TomoDatasetTrain(Dataset):
 
         self.n_slices = train_params['n_slices']
         z_stride = train_params.get('z_stride', 1)
+        options = validation_options(train_params)
 
         self.augmentations = A.Compose([
                 A.SquareSymmetry(p=1.0),
@@ -56,10 +59,23 @@ class TomoDatasetTrain(Dataset):
         recon_1_path =  dataset_params['directory_to_reconstructions'] + '/' + dataset_params['sub_recon_name1']
 
         tiffs_collection = tiffs.glob(recon_0_path)[::z_stride]
-        self.split0, split0_mean, split0_std = tiffs.load_stack(tiffs_collection)
+        statistics_stop = axial_split(len(tiffs_collection), self.n_slices, options)[0] if options['enabled'] else None
+        self.split0, split0_mean, split0_std = tiffs.load_stack(tiffs_collection, statistics_stop=statistics_stop)
 
         tiffs_collection = tiffs.glob(recon_1_path)[::z_stride]
-        self.split1, split1_mean, split1_std = tiffs.load_stack(tiffs_collection)
+        self.split1, split1_mean, split1_std = tiffs.load_stack(tiffs_collection, statistics_stop=statistics_stop)
+        if self.split0.shape != self.split1.shape:
+            raise ValueError('Paired reconstruction stacks must have the same dimensions.')
+        if min(split0_std, split1_std) <= 0 or not np.isfinite([split0_std, split1_std]).all():
+            raise ValueError('Training planes require finite, positive normalization standard deviations.')
+        self.validation_plan = None
+        if options['enabled']:
+            self.validation_plan = validation_plan(self.split0.shape, self.n_slices, self.psz, options)
+            self.validation_plan.update(
+                sources=[str(Path(recon_0_path).resolve()), str(Path(recon_1_path).resolve())],
+                normalization=[float(split0_mean), float(split0_std), float(split1_mean), float(split1_std)],
+                z_stride=z_stride)
+            self.training_centers = np.arange(self.validation_plan['training_centers'][1])
 
         self.split0 -= split0_mean
         self.split0 /= split0_std
@@ -75,32 +91,38 @@ class TomoDatasetTrain(Dataset):
         self.samples = self.__len__()
 
     def __getitem__(self, idx):
-
-
         S, H, W = int(self.split0.shape[0]), int(self.split0.shape[1]), int(self.split0.shape[2])
+        if hasattr(self, 'training_centers'):
+            idx = int(self.training_centers[idx])
+        if self.psz > min(H, W):
+            raise ValueError('Training patch size exceeds the reconstruction dimensions.')
+        row = np.random.randint(0, H - self.psz + 1)
+        col = np.random.randint(0, W - self.psz + 1)
+        return self.crop_pair(idx, row, col, augment=True)
+
+    def crop_pair(self, center, row, col, augment=False):
+        S = self.split0.shape[0]
 
         left = self.n_slices // 2
         right = self.n_slices - 1 - left
         offsets = np.arange(-left, right + 1, dtype=int)  # length == num_slices
-        idxs = idx + offsets
+        idxs = center + offsets
         idxs_mapped = np.clip(idxs, 0, S - 1)
 
-        if self.psz > min(H, W):
-            raise ValueError('Training patch size exceeds the reconstruction dimensions.')
         # Crop before advanced slice indexing: copy only the small patch stack.
-        # Include the last valid origin, and support images exactly psz wide.
-        rst = np.random.randint(0, H - self.psz + 1)
-        cst = np.random.randint(0, W - self.psz + 1)
-        view0 = self.split0[:, rst:rst+self.psz, cst:cst+self.psz][idxs_mapped]
-        view1 = self.split1[:, rst:rst+self.psz, cst:cst+self.psz][idxs_mapped]
+        view0 = self.split0[:, row:row+self.psz, col:col+self.psz][idxs_mapped]
+        view1 = self.split1[:, row:row+self.psz, col:col+self.psz][idxs_mapped]
 
-        augmented = self.augmentations(image=np.moveaxis(view0, 0, -1), split1=np.moveaxis(view1, 0, -1))
-        view0 = np.moveaxis(augmented['image'], -1, 0)
-        view1 = np.moveaxis(augmented['split1'], -1, 0)
+        if augment:
+            augmented = self.augmentations(image=np.moveaxis(view0, 0, -1), split1=np.moveaxis(view1, 0, -1))
+            view0 = np.moveaxis(augmented['image'], -1, 0)
+            view1 = np.moveaxis(augmented['split1'], -1, 0)
 
         return view0, view1
 
     def __len__(self):
+        if hasattr(self, 'training_centers'):
+            return len(self.training_centers)
         return self.split0.shape[0]
 
 def _compute_positions(length: int, patch: int, stride: int) -> List[int]:

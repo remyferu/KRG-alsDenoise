@@ -10,6 +10,7 @@ Each entry is a sub-directory containing:
   best_val_model.pth
   best_lcl_model.pth
   best_edge_model.pth
+  best_ema_model.pth
 """
 
 import os
@@ -131,7 +132,7 @@ def search(config_path):
 
 def register(config_path, model_dir, name=None):
     """
-    Copy *model_dir*/{best_val,best_lcl,best_edge}_model.pth and *config_path*
+    Copy available raw/EMA checkpoints from *model_dir* and *config_path*
     into the registry under an auto-generated (or user-supplied) *name*.
 
     Returns the Path of the registry entry directory.
@@ -152,7 +153,7 @@ def register(config_path, model_dir, name=None):
     # Copy checkpoints that exist
     model_dir = pathlib.Path(model_dir)
     copied = []
-    for pth in ('best_val_model.pth', 'best_lcl_model.pth', 'best_edge_model.pth'):
+    for pth in ('best_val_model.pth', 'best_lcl_model.pth', 'best_edge_model.pth', 'best_ema_model.pth'):
         src = model_dir / pth
         if src.exists():
             shutil.copy2(src, entry_dir / pth)

@@ -7,7 +7,7 @@ from denoise.nafnet25d import NAFNet25D
 
 
 NAF_DEFAULTS = dict(width=32, stem_width=16, detail_blocks=4,
-                    encoder_blocks=[2, 2], middle_blocks=6, decoder_blocks=[2, 2])
+                    encoder_blocks=[2, 2], middle_blocks=6, decoder_blocks=[2, 2], distance_aware=True)
 
 
 def model_spec(params, mode=None):
@@ -16,7 +16,7 @@ def model_spec(params, mode=None):
     architecture = train.get('architecture', 'unet3d' if mode == '3d' else 'unet')
     if mode not in ('2.5d', '3d'):
         raise ValueError('Unknown training mode: %s' % mode)
-    spec = dict(version=1, mode=mode, architecture=architecture)
+    spec = dict(version=2, mode=mode, architecture=architecture)
     if mode == '3d':
         if architecture != 'unet3d':
             raise ValueError('3d mode requires architecture: unet3d.')

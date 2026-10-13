@@ -104,8 +104,10 @@ def make_config(args):
         config['metadata'] = metadata
 
     parent_dir.mkdir(parents=True, exist_ok=True)
-    config_path = parent_dir / ('%s_config.yaml' % rec_name)
-    with open(config_path, 'w') as fh:
+    config_path = (pathlib.Path(args.config_output) if getattr(args, 'config_output', None)
+                   else parent_dir / ('%s_config.yaml' % rec_name))
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, 'x') as fh:
         yaml.dump(config, fh, default_flow_style=False, sort_keys=False)
 
     out_path_name0 = str(parent_dir / ('%s_0' % rec_name))
@@ -418,9 +420,9 @@ def main():
             cmd_parser.add_argument(
                 '--checkpoint',
                 type=str,
-                default='lcl',
-                choices=['val', 'lcl', 'edge'],
-                help='Checkpoint to use: val=lowest val loss, lcl=lowest LCL loss, edge=highest edge score',
+                default='ema',
+                choices=['val', 'lcl', 'edge', 'ema'],
+                help='Checkpoint: val=lowest L1, lcl=lowest LCL, edge=highest EDGE, ema=lowest EMA total loss',
             )
             cmd_parser.add_argument(
                 '--model-dir',
@@ -449,9 +451,9 @@ def main():
             cmd_parser.add_argument(
                 '--checkpoint',
                 type=str,
-                default='lcl',
-                choices=['val', 'lcl', 'edge'],
-                help='Checkpoint to use: val=lowest val loss, lcl=lowest LCL loss, edge=highest edge score',
+                default='ema',
+                choices=['val', 'lcl', 'edge', 'ema'],
+                help='Checkpoint: val=lowest L1, lcl=lowest LCL, edge=highest EDGE, ema=lowest EMA total loss',
             )
             cmd_parser.add_argument(
                 '--model-dir',
@@ -489,6 +491,8 @@ def main():
         metavar='PATH',
         help='Override the derived output base path (tomocupy --out-path-name)',
     )
+    cfg_parser.add_argument('--config-output', type=str, default=None, metavar='FILE',
+                           help='Write a separate config YAML while retaining reconstruction paths')
     cfg_parser.set_defaults(_func=make_config)
 
     # --- register ---

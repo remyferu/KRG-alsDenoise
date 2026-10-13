@@ -26,7 +26,7 @@ def validate_plan(saved, plan_path=None):
         raise ValueError('Expected three distinct reconstruction output directories.')
     for name in rec['outputs'].values():
         safe_child(root, name)
-    if saved['provenance'].get('notebook_version') not in ('3.0', '3.1', '3.2', '3.3', '3.4'):
+    if saved['provenance'].get('notebook_version') not in ('3.0', '3.1', '3.2', '3.3', '3.4', '3.5'):
         raise ValueError('Unsupported release provenance. Create a new v3 run.')
     return saved
 
@@ -78,7 +78,7 @@ def freeze_run(captured, info, center, selection, *, context):
     context.assert_current(captured, check_source=True)
     root = Path(captured['run_dir'])
     stem = Path(captured['source']['path']).stem
-    saved = dict(schema=4, run_dir=str(root), reconstruction=dict(source=copy.deepcopy(captured['source']), dimensions=captured['dimensions'], geometry=dict(center_convention='midpoint_offset', scan_degrees=180, angle_order='increasing', subsets='disjoint_even_odd'), center=float(center), backend=copy.deepcopy(captured['backend']), settings=copy.deepcopy(captured['settings']), outputs=dict(full=stem + '_rec', even=stem + '_rec_0', odd=stem + '_rec_1')), selection=copy.deepcopy(selection), provenance=dict(notebook_version='3.4', policy_version='vo_rows_v1', frozen_utc=utc_now(), scan_metadata=info))
+    saved = dict(schema=4, run_dir=str(root), reconstruction=dict(source=copy.deepcopy(captured['source']), dimensions=captured['dimensions'], geometry=dict(center_convention='midpoint_offset', scan_degrees=180, angle_order='increasing', subsets='disjoint_even_odd'), center=float(center), backend=copy.deepcopy(captured['backend']), settings=copy.deepcopy(captured['settings']), outputs=dict(full=stem + '_rec', even=stem + '_rec_0', odd=stem + '_rec_1')), selection=copy.deepcopy(selection), provenance=dict(notebook_version='3.5', policy_version='vo_rows_v1', frozen_utc=utc_now(), scan_metadata=info))
     validate_plan(saved)
     with exclusive_lock(root / '.run.lock'):
         path = root / 'run_plan.json'

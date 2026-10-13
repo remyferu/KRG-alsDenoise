@@ -53,6 +53,42 @@ def validate_denoise_config(cfg, run_dir, full_dir, even_dir, odd_dir, ncols, *,
         raise ValueError('train.min_delta must be finite and nonnegative.')
     if not isinstance(train.get('lr'), (int, float)) or not np.isfinite(train['lr']) or train['lr'] <= 0:
         raise ValueError('train.lr must be finite and positive.')
+    for key in ('validation', 'lr_schedule', 'ema'):
+        options = train.get(key, {})
+        if not isinstance(options, dict) or type(options.get('enabled', False)) is not bool:
+            raise ValueError(f'train.{key} must be a mapping with boolean enabled.')
+    validation = train.get('validation', {})
+    if validation.get('enabled', mode == '2.5d'):
+        fraction = validation.get('fraction', .1)
+        if mode != '2.5d' or type(fraction) not in (int, float) or not 0 < fraction < .5:
+            raise ValueError('Fixed validation requires 2.5d mode and fraction between 0 and 0.5.')
+        if type(validation.get('samples', 128)) is not int or validation.get('samples', 128) < 1:
+            raise ValueError('validation.samples must be positive.')
+        if type(validation.get('seed', 1729)) is not int or validation.get('seed', 1729) < 0:
+            raise ValueError('validation.seed must be nonnegative.')
+        if nrows is not None:
+            import math
+            split = nrows-max(train['n_slices'], math.ceil(nrows*fraction))
+            if split <= train['n_slices']//2:
+                raise ValueError('Not enough axial planes for disjoint training and validation stacks.')
+    schedule = train.get('lr_schedule', {})
+    if schedule.get('enabled', True):
+        factor, floor = schedule.get('factor', .5), schedule.get('min_lr', 1e-5)
+        if type(factor) not in (float, int) or not 0 < factor < 1:
+            raise ValueError('lr_schedule.factor must be between 0 and 1.')
+        if type(floor) not in (float, int) or not 0 <= floor < train['lr']:
+            raise ValueError('lr_schedule.min_lr must be nonnegative and below train.lr.')
+        for key, default in (('patience', 25), ('cooldown', 5), ('refinement_epochs', 30)):
+            if type(schedule.get(key, default)) is not int or schedule.get(key, default) < 0:
+                raise ValueError(f'lr_schedule.{key} must be nonnegative.')
+    ema = train.get('ema', {})
+    if ema.get('enabled', True):
+        if type(ema.get('decay', .999)) not in (float, int) or not 0 < ema.get('decay', .999) < 1:
+            raise ValueError('ema.decay must be between 0 and 1.')
+        if type(ema.get('evaluate_every', 1)) is not int or ema.get('evaluate_every', 1) < 1:
+            raise ValueError('ema.evaluate_every must be positive.')
+    if architecture == 'nafnet25d' and type(train.get('nafnet', {}).get('distance_aware', False)) is not bool:
+        raise ValueError('nafnet.distance_aware must be boolean.')
     overlap = cfg['infer'].get('overlap')
     if not isinstance(overlap, (int, float)) or not np.isfinite(overlap) or (not 0 <= overlap < 1):
         raise ValueError('infer.overlap must be in [0, 1).')
@@ -70,9 +106,10 @@ def validate_denoise_config(cfg, run_dir, full_dir, even_dir, odd_dir, ncols, *,
 
 def validate_checkpoint(train_dir, checkpoint):
     """Resolve a supported checkpoint without starting inference or creating outputs."""
-    names = {'lcl': 'best_lcl_model.pth', 'val': 'best_val_model.pth', 'edge': 'best_edge_model.pth'}
+    names = {'lcl': 'best_lcl_model.pth', 'val': 'best_val_model.pth', 'edge': 'best_edge_model.pth',
+             'ema': 'best_ema_model.pth'}
     if checkpoint not in names:
-        raise ValueError('CHECKPOINT must be lcl, val, or edge.')
+        raise ValueError('CHECKPOINT must be lcl, val, edge, or ema.')
     path = Path(train_dir) / names[checkpoint]
     if not path.is_file():
         raise FileNotFoundError(f'Requested checkpoint is not saved yet: {path}')

@@ -152,6 +152,7 @@ class TrainingDecisionContractTests(unittest.TestCase):
                      step_val_losses=[0.], best_val_loss=10.)
         for epoch in (1, 2, 3):
             scope['epoch'] = epoch
+            scope['local_stop'] = monitor.update(epoch, 2., warming_up=False)
             exec(code, scope)
             self.assertEqual(scope['early_stop'], epoch == 3)
         saved = copy.deepcopy(monitor.state_dict())

@@ -2,7 +2,7 @@
 
 NAFBlock is adapted from megvii-research/NAFNet (Copyright (c) 2022
 megvii-model, MIT). See third_party/NAFNet_LICENSE.txt. Changes: native
-PyTorch channel LayerNorm, 2.5D gated fusion, a detail branch and center-slice
+PyTorch channel LayerNorm, distance-aware 2.5D gated fusion, a detail branch and center-slice
 residual output. This is an experimental CT adaptation, not a pretrained model.
 """
 import torch
@@ -63,7 +63,7 @@ class NAFNet25D(nn.Module):
     """[B,K,H,W] -> [B,1,H,W], retaining the center slice as a residual path."""
     def __init__(self, n_slices=5, width=32, stem_width=16,
                  detail_blocks=4, encoder_blocks=(2, 2),
-                 middle_blocks=6, decoder_blocks=(2, 2)):
+                 middle_blocks=6, decoder_blocks=(2, 2), distance_aware=True):
         super().__init__()
         if n_slices < 3 or n_slices % 2 != 1:
             raise ValueError('NAFNet25D requires an odd n_slices >= 3 (e.g. 5, 7, 9).')
@@ -74,11 +74,18 @@ class NAFNet25D(nn.Module):
         if min(detail_blocks, middle_blocks, *encoder_blocks, *decoder_blocks) < 0:
             raise ValueError('Block counts must be nonnegative.')
         self.n_slices = n_slices
+        if type(distance_aware) is not bool:
+            raise ValueError('distance_aware must be boolean.')
+        self.distance_aware = distance_aware
+        if distance_aware:
+            # A symmetric distance prior distinguishes near and far neighbors.
+            distances = torch.arange(1, n_slices//2+1, dtype=torch.float32)
+            self.distance_bias = nn.Parameter(-distances.log()[:, None].repeat(1, stem_width))
         self.stem = nn.Conv2d(1, stem_width, 3, padding=1)
         self.neighbor_gate = nn.Sequential(
             nn.Conv2d(3 * stem_width, 3 * stem_width, 3,
                       padding=1, groups=3 * stem_width),
-            nn.Conv2d(3 * stem_width, stem_width, 1), nn.Sigmoid())
+            nn.Conv2d(3 * stem_width, stem_width, 1), nn.Identity() if distance_aware else nn.Sigmoid())
         nn.init.constant_(self.neighbor_gate[1].bias, -2.)
         self.fuse = nn.Conv2d(2 * stem_width, width, 1)
         self.detail = blocks(width, detail_blocks)
@@ -111,7 +118,13 @@ class NAFNet25D(nn.Module):
             if i == k // 2:
                 continue
             delta = features[:, i] - center
-            gate = self.neighbor_gate(torch.cat((center, features[:, i], delta), dim=1))
+            gate_input = torch.cat((center, features[:, i], delta), dim=1)
+            if self.distance_aware:
+                logits = self.neighbor_gate(gate_input)
+                bias = self.distance_bias[abs(i-k//2)-1].view(1, -1, 1, 1)
+                gate = torch.sigmoid(logits + bias.to(logits.dtype))
+            else:
+                gate = self.neighbor_gate(gate_input)
             correction = correction + gate * delta / (k - 1)
         fused = self.fuse(torch.cat((center, correction), dim=1))
         detail = self.detail(fused)

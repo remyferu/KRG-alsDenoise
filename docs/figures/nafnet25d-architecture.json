@@ -1,7 +1,7 @@
 {
   "source": "denoise/nafnet25d.py",
-  "source_sha256": "c0431bc2f2d2b34e7db6c6181a75cccb30c6d4218ea485cd9da490f2bfefba8b",
-  "parameters": 989745,
+  "source_sha256": "53ce8707c2386561e343abe8a48bf61d03985d3214099ccc7218012c38e9ca5f",
+  "parameters": 989777,
   "module_parameters": {
     "stem": 160,
     "neighbor_gate": 1264,
@@ -16,7 +16,8 @@
     "dec1": 61568,
     "up0": 8320,
     "dec0": 16448,
-    "head": 2369
+    "head": 2369,
+    "distance_bias": 32
   },
   "default_options": {
     "n_slices": 5,
@@ -31,7 +32,8 @@
     "decoder_blocks": [
       2,
       2
-    ]
+    ],
+    "distance_aware": true
   },
   "default_module_output_shapes": {
     "stem": [

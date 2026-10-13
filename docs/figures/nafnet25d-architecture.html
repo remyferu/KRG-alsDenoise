@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NAFNet25D architecture | KRG-alsDenoise</title>
+<title>NAFNet25D v3.5 architecture | KRG-alsDenoise</title>
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; background: #e7edf3; color: #172b42; font: 15px system-ui, sans-serif; }
@@ -25,7 +25,7 @@ img { display: block; background: white; box-shadow: 0 3px 15px #172b4226; heigh
 </head>
 <body>
 <header>
-<h1>NAFNet25D architecture</h1>
+<h1>NAFNet25D v3.5 architecture</h1>
 <p>Implemented five-slice defaults. Drag to pan; use the controls or Ctrl + mouse wheel to zoom.</p>
 <nav aria-label="Diagram controls">
 <button type="button" id="out" aria-label="Zoom out">−</button>
@@ -39,7 +39,7 @@ img { display: block; background: white; box-shadow: 0 3px 15px #172b4226; heigh
 </header>
 <main id="viewport" tabindex="0" aria-label="Scrollable neural network diagram">
 <img id="diagram" src="nafnet25d-architecture.svg" draggable="false"
- alt="NAFNet25D network: shared per-slice stem, gated neighbor corrections, full-resolution detail branch and two-level encoder-decoder with additive skips, residual head, and center-image shortcut. Lower panels explain axial fusion, every NAFBlock operation, and paired CT training.">
+ alt="NAFNet25D v3.5 network: shared per-slice stem, distance-aware gated neighbor corrections, full-resolution detail branch and two-level encoder-decoder with additive skips, residual head, and center-image shortcut. Lower panels explain distance biases, every NAFBlock operation, fixed validation, learning-rate scheduling, EMA and paired CT training.">
 </main>
 <script>
 const viewport = document.querySelector('#viewport');

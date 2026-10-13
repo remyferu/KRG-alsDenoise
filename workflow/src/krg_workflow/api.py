@@ -51,6 +51,15 @@ class TrainingRun:
     output: Path
     mode: str
     architecture: str
+    label: str
+
+    @property
+    def log_path(self):
+        return self.output.parent/'logs'/self.label/'train.log'
+
+    @property
+    def history_dir(self):
+        return self.output.parent/'training_history'/self.label
 
 
 def inspect_run(workspace, scan_path, run_label, previous=None):
@@ -70,12 +79,12 @@ def inspect_run(workspace, scan_path, run_label, previous=None):
             raise ValueError('Frozen source changed: use a new run label.')
     elif (root/'v3_run_identity.json').exists():
         saved = json.loads((root/'v3_run_identity.json').read_text(encoding='utf-8'))
-        if saved.get('notebook_version') not in ('3.0','3.1','3.2','3.3','3.4') or saved.get('source') != source:
+        if saved.get('notebook_version') not in ('3.0','3.1','3.2','3.3','3.4','3.5') or saved.get('source') != source:
             raise ValueError('Run identity changed: use a new run label.')
     elif any(root.iterdir()):
         raise ValueError('Existing unplanned directory: use a new run label.')
     else:
-        json_write(root/'v3_run_identity.json', dict(notebook_version='3.4',source=source))
+        json_write(root/'v3_run_identity.json', dict(notebook_version='3.5',source=source))
     json_write(root/'scan_metadata.json', info)
     print(json.dumps(info, indent=2))
     _, rows, columns = info['shape']
@@ -165,14 +174,18 @@ def inspect_pairs(run, view_options=None):
         count=rows,index=rows//2,index_label='Row',**(view_options or {}))
 
 
-def configure_training(run, workspace, mode='2.5d', architecture='nafnet25d', overrides=None, on_line=None):
+def configure_training(run, workspace, mode='2.5d', architecture='nafnet25d', overrides=None,
+                       on_line=None, label='v3_5_1'):
+    if not isinstance(label, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', label):
+        raise ValueError('Training label must contain letters, digits, underscores or hyphens.')
     full, even, odd = reconstruction_paths(run)
     _, rows, cols = run.shape
     for folder in (full,even,odd):
         validate_stack(folder,rows,cols)
     gpu_ids = all_allocated_gpus()
     requested = training_settings(mode, architecture, **(overrides or {}))
-    config, output = run.run_dir/(full.name+'_config.yaml'), run.run_dir/'TrainOutput'
+    config = run.run_dir/(full.name+'_'+label+'_config.yaml')
+    output = run.run_dir/('TrainOutput_'+label)
     with exclusive_lock(run.run_dir/'.run.lock'):
         if output.exists() and not config.is_file():
             raise FileNotFoundError('TrainOutput exists but its YAML is missing. Restore the original YAML.')
@@ -187,7 +200,7 @@ def configure_training(run, workspace, mode='2.5d', architecture='nafnet25d', ov
             raise ValueError('Installed denoise CLI differs from this repository. Update the n2i installation.')
         if not config.exists():
             run_logged(list(workspace.denoise_command)+['prepare','--file-name',run.source['path'],
-                '--out-path-name',str(full)],run.run_dir/'logs/prepare.log',run.run_dir,on_line=on_line)
+                '--out-path-name',str(full),'--config-output',str(config)],run.run_dir/'logs/prepare.log',run.run_dir,on_line=on_line)
         cfg = yaml.safe_load(config.read_text(encoding='utf-8'))
         if not isinstance(cfg,dict) or not isinstance(cfg.get('train'),dict):
             raise ValueError('Training YAML is malformed; restore it before continuing.')
@@ -205,10 +218,11 @@ def configure_training(run, workspace, mode='2.5d', architecture='nafnet25d', ov
             atomic_text(config,yaml.safe_dump(cfg,sort_keys=False))
         else:
             print('Keeping saved training settings and normalization for resume.')
-    run.training = TrainingRun(run.snapshot(),config,output,cfg['train'].get('mode','2.5d'),requested['architecture'])
+    run.training = TrainingRun(run.snapshot(),config,output,cfg['train'].get('mode','2.5d'),requested['architecture'],label)
     print(yaml.safe_dump(cfg,sort_keys=False))
     print('Training GPUs:',gpu_ids,'| batch per GPU:',cfg['train']['mbsz'])
     print('Paired input RAM across ranks:',round(2*rows*cols**2*4*len(gpu_ids.split(','))/2**30,1),'GiB plus overhead.')
+    print('Training output:',output,'| log:',run.training.log_path)
     return run.training
 
 
@@ -236,7 +250,7 @@ def training_command(run, workspace):
     for folder in reconstruction_paths(run):
         validate_stack(folder,run.shape[1],run.shape[2])
     command = list(workspace.denoise_command)+['train','--config',str(run.training.config),
-        '--gpus',gpu_ids,'--mode',run.training.mode,'--no-search']
+        '--gpus',gpu_ids,'--mode',run.training.mode,'--no-search','--output-dir',str(run.training.output)]
     if run.training.output.exists():
         if not (run.training.output/'resume.pth').is_file():
             raise ValueError('TrainOutput has no resume checkpoint. Preserve it and use a new run label.')
@@ -253,18 +267,18 @@ def train_run(run, workspace, enabled=False, on_line=None):
     outcome = 'completed'
     with exclusive_lock(run.run_dir/'.run.lock'):
         try:
-            run_logged(command,run.run_dir/'logs/train.log',run.run_dir,on_line=on_line)
+            run_logged(command,run.training.log_path,run.run_dir,on_line=on_line)
         except BaseException:
             outcome = 'interrupted or failed'
             raise
         finally:
             try:
-                plot_training_history(run.run_dir/'logs/train.log',run.run_dir/'training_history',outcome=outcome)
+                plot_training_history(run.training.log_path,run.training.history_dir,outcome=outcome)
             except Exception as error:
                 print('History plot unavailable:',error,'; rerun Show training history.')
 
 
-def inference_command(run, workspace, kind, checkpoint='lcl', gpu_id=None, row=None):
+def inference_command(run, workspace, kind, checkpoint='ema', gpu_id=None, row=None):
     cfg = training_config(run,normalized=True,volume=kind=='volume')
     validate_checkpoint(run.training.output,checkpoint)
     gpu_id = validate_gpu_ids(first_visible_gpu() if gpu_id is None else gpu_id)
@@ -273,7 +287,8 @@ def inference_command(run, workspace, kind, checkpoint='lcl', gpu_id=None, row=N
     if kind not in ('slice','volume'):
         raise ValueError('Inference kind must be slice or volume.')
     command = list(workspace.denoise_command)+[kind,'--config',str(run.training.config),
-        '--gpus',gpu_id,'--mode',cfg['train'].get('mode','2.5d'),'--checkpoint',checkpoint]
+        '--gpus',gpu_id,'--mode',cfg['train'].get('mode','2.5d'),'--checkpoint',checkpoint,
+        '--model-dir',str(run.training.output),'--output-dir',str(denoised_path(run,kind,checkpoint))]
     if kind=='slice':
         if type(row) is not int or not 0<=row<run.shape[1]:
             raise ValueError('Select a valid integer slice number.')
@@ -281,15 +296,16 @@ def inference_command(run, workspace, kind, checkpoint='lcl', gpu_id=None, row=N
     return command
 
 
-def denoised_path(run, kind):
+def denoised_path(run, kind, checkpoint='ema'):
     cfg = training_config(run,normalized=True,volume=kind=='volume')
     full = reconstruction_paths(run)[0]
     stem = full.name[:-4] if full.name.endswith('_rec') else full.name
     suffix = '_nafnet25d' if cfg['train'].get('architecture')=='nafnet25d' else ''
-    return run.run_dir/(stem+('_denoised_slices' if kind=='slice' else '_denoised_volume_'+run.training.mode)+suffix)
+    return run.run_dir/(stem+('_denoised_slices' if kind=='slice' else '_denoised_volume_'+run.training.mode)
+                       +suffix+'_'+run.training.label+'_'+checkpoint)
 
 
-def inspect_denoising(run, workspace, row=None, checkpoint='lcl', gpu_id=None, on_line=None, view_options=None):
+def inspect_denoising(run, workspace, row=None, checkpoint='ema', gpu_id=None, on_line=None, view_options=None):
     from .notebook_ui import image_display_limits, zoom_image_viewer
     row = run.shape[1]//2 if row is None else row
     if type(row) is not int or not 0 <= row < run.shape[1]:
@@ -302,9 +318,9 @@ def inspect_denoising(run, workspace, row=None, checkpoint='lcl', gpu_id=None, o
         require_compute_session()
         with exclusive_lock(run.run_dir/'.run.lock'):
             run_logged(command,run.run_dir/'logs/slice.log',run.run_dir,on_line=on_line)
-        folder = denoised_path(run,'slice')
+        folder = denoised_path(run,'slice',checkpoint)
     else:
-        folder = denoised_path(run,'volume')
+        folder = denoised_path(run,'volume',checkpoint)
     path = folder/f'{row:05d}.tiff'
     if not path.is_file():
         print('3D has no single-slice preview. Run volume inference, then inspect this row.')
@@ -321,10 +337,10 @@ def inspect_denoising(run, workspace, row=None, checkpoint='lcl', gpu_id=None, o
         captured=captured,context=run,title=f'Denoising inspection — row {row}',**(view_options or {}))
 
 
-def denoise_volume(run, workspace, checkpoint='lcl', gpu_id=None, on_line=None, view_options=None):
+def denoise_volume(run, workspace, checkpoint='ema', gpu_id=None, on_line=None, view_options=None):
     from .notebook_ui import browse_tiffs
     command = inference_command(run,workspace,'volume',checkpoint,gpu_id)
-    folder = denoised_path(run,'volume')
+    folder = denoised_path(run,'volume',checkpoint)
     if folder.exists():
         raise ValueError('Volume output already exists: '+str(folder)+'. Preserve it before restarting.')
     require_compute_session()

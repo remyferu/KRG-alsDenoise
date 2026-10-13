@@ -126,7 +126,7 @@ portable first-time recipe for this notebook.
 
 Open [NERSC JupyterHub](https://jupyter.nersc.gov/), start a **single-node GPU**
 compute server and open
-`microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.4.ipynb`.
+`microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.5.ipynb`.
 For the full-volume example, choose **Exclusive GPU Node**, or a Configurable job
 with sufficient host RAM and time. NERSC documents four GPUs and full node memory
 for the exclusive GPU configuration; a shared GPU server has one GPU and a
@@ -181,19 +181,20 @@ large input copies, TIFFs and active model outputs. Standard output layout:
 
 ```text
 $HOME/microct-n2i-source/microct/backend/ALS_recon_helper.py
-$HOME/microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.4.ipynb
+$HOME/microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.5.ipynb
 $HOME/microct-n2i-envs/als832/         # notebook Python
 $HOME/microct-n2i-envs/n2i/           # denoising Python
 $PSCRATCH/noise2inverse360/<scan>/<RUN_LABEL>/
   run_plan.json, scan_metadata.json
   projection_views/even.h5, odd.h5
   <scan>_rec/, <scan>_rec_0/, <scan>_rec_1/
-  <scan>_rec_config.yaml
-  TrainOutput/results/reference_metrics.csv
-  TrainOutput/{resume,best_val_model,best_lcl_model,best_edge_model}.pth
-  <scan>_denoised_slices_nafnet25d/
-  <scan>_denoised_volume_2.5d_nafnet25d/
-  logs/, training_history/
+  <scan>_rec_<TRAIN_LABEL>_config.yaml
+  TrainOutput_<TRAIN_LABEL>/validation.json
+  TrainOutput_<TRAIN_LABEL>/results/reference_metrics.csv
+  TrainOutput_<TRAIN_LABEL>/{resume,best_val_model,best_lcl_model,best_edge_model,best_ema_model}.pth
+  <scan>_denoised_slices_nafnet25d_<TRAIN_LABEL>_<checkpoint>/
+  <scan>_denoised_volume_2.5d_nafnet25d_<TRAIN_LABEL>_<checkpoint>/
+  logs/<TRAIN_LABEL>/train.log, training_history/<TRAIN_LABEL>/
 $PSCRATCH/noise2inverse360/reconstruction_queue_v3.json
 ```
 
@@ -214,9 +215,17 @@ git status --short
 git pull --ff-only
 ```
 
-For the first upgrade from v3.3, also activate the ALS environment and install
-`python -m pip install --no-deps -e "$HOME/microct-n2i-source/KRG-alsDenoise/workflow"`.
-Open the new v3.4 notebook; the v3.3 notebook remains available.
+Refresh package metadata in both existing environments for the v3.5 release:
+
+```bash
+"$HOME/microct-n2i-envs/als832/bin/python" -m pip install --no-deps -e workflow
+"$HOME/microct-n2i-envs/n2i/bin/python" -m pip install --no-deps -e .
+```
+Open the v3.5 notebook. Earlier notebooks remain available for reference;
+v3.5 training requires a fresh training label and v3.5 checkpoints.
+For existing full/even/odd stacks, retain the reconstruction `RUN_LABEL` and
+choose a new `TRAIN_LABEL` in cell 12. Model training can start from those stacks
+without repeating COR estimation or reconstruction.
 
 Preserve local notebook edits before pulling. Editable installation reads code
 from this checkout, so routine code updates need no package reinstall; changed

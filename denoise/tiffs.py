@@ -11,11 +11,12 @@ def natural_sorted(l):
     return sorted(l, key=key)
 
 
-def load_stack(paths, binning=1, use_tqdm=True):
+def load_stack(paths, binning=1, use_tqdm=True, statistics_stop=None):
     """Load TIFFs as [slice, row, column] and return the stack, mean and std.
 
     binning subsamples each spatial axis by the given stride. Nonfinite values
-    are replaced before computing statistics.
+    are replaced before computing statistics. statistics_stop restricts those
+    statistics to the leading training planes while loading the full stack.
     """
 
     img0 = tifffile.imread(str(paths[0]))
@@ -34,9 +35,14 @@ def load_stack(paths, binning=1, use_tqdm=True):
         img = tifffile.imread(str(p))[::binning, ::binning]
         img = np.nan_to_num(img)
         imgs[i] = img
-        total_sum += img.sum()
-        total_sq  += (img**2).sum()
-        total_n   += img.size
+        if statistics_stop is None:
+            total_sum += img.sum()
+            total_sq += (img**2).sum()
+            total_n += img.size
+        elif i < statistics_stop:
+            total_sum += img.sum(dtype=np.float64)
+            total_sq += np.square(img, dtype=np.float64).sum()
+            total_n += img.size
 
     mean = total_sum / total_n
     var  = total_sq / total_n - mean**2

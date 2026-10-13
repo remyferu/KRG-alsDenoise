@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 def parse_training_history(log_path):
     """Read epoch means; retain the latest complete record for resumed epochs."""
     path = Path(log_path)
-    metadata = dict(mode=None, gpu_count=None, stop_reason=None, best_l1=None, best_lcl=None, incomplete_epochs=[], duplicate_epochs=[])
+    metadata = dict(mode=None, gpu_count=None, stop_reason=None, best_l1=None, best_lcl=None,
+                    metric_scope='final_rank', validation='training_resampling',
+                    incomplete_epochs=[], duplicate_epochs=[])
     if not path.is_file():
         return dict(rows=[], metadata=metadata, log_path=str(path))
     number = '[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?'
@@ -36,7 +38,8 @@ def parse_training_history(log_path):
             row = dict(current)
             row.setdefault('warmup', None)
             row.setdefault('edge', None)
-            for key in ('train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'train_total', 'eval_total', 'early_stop_mean'):
+            for key in ('train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'train_total', 'eval_total',
+                        'early_stop_mean', 'ema_total', 'learning_rate', 'lr_reduced'):
                 row.setdefault(key, None)
             row['ssim_data_range'] = metadata.get('ssim_data_range')
             records[row['epoch']] = row
@@ -58,6 +61,9 @@ def parse_training_history(log_path):
             metric_range = re.search('ssim_data_range=(' + number + ')', line)
             if metric_range:
                 metadata['ssim_data_range'] = float(metric_range[1])
+            aggregation = re.search('Metric aggregation: scope=(\\w+); weighting=\\w+; validation=(\\w+)', line)
+            if aggregation:
+                metadata.update(metric_scope=aggregation[1], validation=aggregation[2])
             mode = re.search('(?:Training mode:\\s*|--mode\\s+)(2\\.5d|3d)\\b', line)
             if mode:
                 metadata['mode'] = mode[1]
@@ -80,6 +86,12 @@ def parse_training_history(log_path):
                 monitor = re.search('\\[EarlyStopping\\] mean total loss:\\s*(' + number + ')', line)
                 if monitor:
                     current['early_stop_mean'] = float(monitor[1])
+                ema = re.search('\\[EMA\\] Total loss:\\s*(' + number + ')', line)
+                if ema:
+                    current['ema_total'] = float(ema[1])
+                learning_rate = re.search('\\[LearningRate\\] lr:\\s*(' + number + '); reduced: (True|False)', line)
+                if learning_rate:
+                    current.update(learning_rate=float(learning_rate[1]), lr_reduced=learning_rate[2] == 'True')
                 warmup = re.search('Is model warming up\\?:\\s*(True|False)', line)
                 if warmup:
                     current['warmup'] = warmup[1] == 'True'
@@ -108,7 +120,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
     folder = Path(output_dir) if output_dir is not None else log_path.parent.parent / 'training_history'
     folder.mkdir(parents=True, exist_ok=True)
     epochs = np.arange(rows[0]['epoch'], rows[-1]['epoch'] + 1)
-    values = {key: np.full(len(epochs), np.nan) for key in ('train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'train_total', 'eval_total', 'early_stop_mean')}
+    values = {key: np.full(len(epochs), np.nan) for key in ('train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'train_total', 'eval_total', 'early_stop_mean', 'ema_total', 'learning_rate')}
     for row in rows:
         for key in values:
             values[key][row['epoch'] - epochs[0]] = row[key]
@@ -137,7 +149,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
     temp_csv = folder / ('.training_history.' + uuid.uuid4().hex + '.tmp')
     try:
         with temp_csv.open('w', newline='', encoding='utf-8') as stream:
-            writer = csv.DictWriter(stream, fieldnames=['epoch', 'train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'edge', 'warmup', 'train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'ssim_data_range', 'train_total', 'eval_total', 'early_stop_mean'])
+            writer = csv.DictWriter(stream, fieldnames=['epoch', 'train_l1', 'eval_l1', 'train_lcl', 'eval_lcl', 'edge', 'warmup', 'train_l2', 'eval_l2', 'train_ssim', 'eval_ssim', 'ssim_data_range', 'train_total', 'eval_total', 'early_stop_mean', 'ema_total', 'learning_rate', 'lr_reduced'])
             writer.writeheader()
             writer.writerows(rows)
         temp_csv.replace(paths['csv'])
@@ -147,7 +159,8 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
     with plt.rc_context(style):
         has_reference = any((np.isfinite(values[key]).any() for key in ('train_l2', 'eval_l2', 'train_ssim', 'eval_ssim')))
         has_total = any(np.isfinite(values[key]).any() for key in ('train_total', 'eval_total'))
-        panels = 2 + 2 * int(has_reference) + int(has_total)
+        has_lr = np.isfinite(values['learning_rate']).any()
+        panels = 2 + 2 * int(has_reference) + int(has_total) + int(has_lr)
         fig, axes = plt.subplots(panels, 1, figsize=(12, 8.8 + 3.1 * (panels - 2)), sharex=True)
         try:
             fig.patch.set_facecolor('white')
@@ -166,7 +179,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
             if has_reference:
                 specifications.extend([(axes[2], 'train_l2', 'eval_l2', 'L2 / MSE (reference only)', 'Epoch-average paired MSE', None), (axes[3], 'train_ssim', 'eval_ssim', 'SSIM loss (reference only)', 'Epoch-average paired 1 - SSIM', None)])
             if has_total:
-                specifications.append((axes[-1], 'train_total', 'eval_total', 'Total objective and early stopping', 'Epoch-average total loss', None))
+                specifications.append((axes[2+2*int(has_reference)], 'train_total', 'eval_total', 'Total objective and early stopping', 'Epoch-average total loss', None))
             for ax, train_key, eval_key, title, ylabel, best in specifications:
                 ax.set_facecolor('#fbfcfe')
                 end = metadata['warmup_end']
@@ -182,6 +195,10 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                 if eval_key == 'eval_total' and np.isfinite(values['early_stop_mean']).any():
                     ax.plot(epochs, values['early_stop_mean'], color='#243447', linestyle='--',
                             linewidth=1.7, label='Stopping monitor (logged)', zorder=4)
+                if eval_key == 'eval_total' and np.isfinite(values['ema_total']).any():
+                    available = np.isfinite(values['ema_total'])
+                    ax.plot(epochs[available], values['ema_total'][available], color='#7953a6',
+                            linewidth=1.7, marker='.', label='EMA weights (raw evaluation)', zorder=4)
                 ax.set_title(title, loc='left', fontweight='bold', fontsize=14, pad=12)
                 ax.set_ylabel(ylabel)
                 ax.grid(axis='y', color='#dce3ea', linewidth=0.7)
@@ -200,12 +217,26 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                         ax.text(*position, note + ' (earlier history)', transform=ax.transAxes, fontsize=10, bbox=box)
             if metadata['warmup_end'] is not None:
                 axes[0].text(metadata['warmup_end'] + 5, 0.88, 'LCL warmup ended', transform=axes[0].get_xaxis_transform(), fontsize=9, color='#687889')
+            if has_lr:
+                ax = axes[-1]
+                available = np.isfinite(values['learning_rate'])
+                ax.step(epochs[available], values['learning_rate'][available], where='post', color='#2166ac', linewidth=2)
+                if (values['learning_rate'][available] > 0).all():
+                    ax.set_yscale('log')
+                ax.set_title('Learning rate', loc='left', fontweight='bold', fontsize=14, pad=12)
+                ax.set_ylabel('Adam learning rate')
+                ax.grid(axis='y', color='#dce3ea', linewidth=.7)
             axes[-1].set_xlabel('Epoch', labelpad=10)
             curve_note = f'Faint: raw epochs. Solid: trailing {moving_window}-epoch display averages.'
             if has_total and np.isfinite(values['early_stop_mean']).any():
                 curve_note += ' Dashed: logged stopping monitor.'
             fig.text(0.08, 0.047, curve_note, fontsize=10, color='#596b7d')
-            fig.text(0.08, 0.021, 'Evaluation uses the training dataset; logged metrics represent one GPU process. LCL is plotted with its logged weight. L2/SSIM are reference metrics only.', fontsize=9, color='#596b7d')
+            basis = ('Fixed held-out patches; sample-weighted metrics across all GPUs.'
+                     if metadata['validation'] == 'fixed_held_out' else
+                     'Evaluation resamples training data; sample-weighted metrics across all GPUs.'
+                     if metadata['metric_scope'] == 'all_ranks' else
+                     'Evaluation resamples training data; metrics represent the final GPU rank.')
+            fig.text(0.08, 0.021, basis+' LCL uses its logged weight; L2/SSIM are reference metrics.', fontsize=9, color='#596b7d')
             fig.subplots_adjust(left=0.105, right=0.97, top=0.87, bottom=0.12, hspace=0.31)
             for extension in ('png', 'svg'):
                 temp = folder / ('.training_loss_history.' + uuid.uuid4().hex + '.tmp')

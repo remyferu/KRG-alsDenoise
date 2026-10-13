@@ -1,14 +1,28 @@
-"""Checkpoint selection and loading; serialization format is unchanged."""
+"""Checkpoint selection and loading for v3.5 training and inference."""
 import os
+from pathlib import Path
+import uuid
 import torch
 from . import log
 from .model_factory import load_model, validate_checkpoint
 
-CHECKPOINT_NAMES = dict(val='best_val_model.pth',lcl='best_lcl_model.pth',edge='best_edge_model.pth')
+CHECKPOINT_NAMES = dict(val='best_val_model.pth',lcl='best_lcl_model.pth',edge='best_edge_model.pth',
+                        ema='best_ema_model.pth')
+
+
+def save_checkpoint(state, path):
+    """Keep the previous checkpoint intact until its replacement is complete."""
+    path = Path(path)
+    temporary = path.with_name('.'+path.name+'.'+uuid.uuid4().hex+'.tmp')
+    try:
+        torch.save(state, temporary)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_inference_model(params, args, mode, device):
-    name = CHECKPOINT_NAMES[getattr(args,'checkpoint','lcl')]
+    name = CHECKPOINT_NAMES[getattr(args,'checkpoint','ema')]
     directory = getattr(args,'model_dir',None) or os.path.join(
         params['dataset']['directory_to_reconstructions'],'TrainOutput')
     log.info('Using checkpoint: %s' % name)
@@ -27,6 +41,8 @@ def initial_checkpoint(params, args, mode, output):
     if path:
         checkpoint = torch.load(path,map_location='cpu',weights_only=False)
         validate_checkpoint(checkpoint,params,mode)
+        if getattr(args, 'resume', False) and checkpoint.get('training_version') != 2:
+            raise ValueError('v3.5 training checkpoints are required for resume. Start a new training output directory.')
         return checkpoint
     if os.path.exists(output):
         raise RuntimeError('Training output already exists: %s. Use --resume or a new --output-dir.' % output)

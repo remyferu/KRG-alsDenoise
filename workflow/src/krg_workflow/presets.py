@@ -2,7 +2,7 @@
 from copy import deepcopy
 
 NAFNET = dict(width=32, stem_width=16, detail_blocks=4, encoder_blocks=[2, 2],
-              middle_blocks=6, decoder_blocks=[2, 2])
+              middle_blocks=6, decoder_blocks=[2, 2], distance_aware=True)
 RECONSTRUCTION = dict(als_chunk_sino=25, method='fbp', fc=0.75,
     preprocessing=dict(minimum_transmission=0.01, outlier_diff_1D=0.0,
                        outlier_size_1D=3, snr=3.0, la_size=51, sm_size=0),
@@ -27,11 +27,19 @@ def training_settings(mode='2.5d', architecture='nafnet25d', **overrides):
                  maxep=2000, patience=100, z_stride=1, num_workers=0, log_every=50,
                  early_stopping_window=10, min_delta=.001,
                  precision='bf16' if architecture=='nafnet25d' else 'fp32')
+    train['validation'] = dict(enabled=mode == '2.5d', fraction=.1, samples=128, seed=1729)
+    train['lr_schedule'] = dict(enabled=True, factor=.5, patience=25, cooldown=5,
+                                min_lr=1e-5, refinement_epochs=30)
+    train['ema'] = dict(enabled=True, decay=.999, evaluate_every=1)
     if architecture=='nafnet25d':
         train['nafnet'] = deepcopy(NAFNET)
     if mode=='3d':
         train.update(psz_3d=96, nb_patches_3d=17600, n_blocks_3d=4, start_filts_3d=56)
-    train.update(deepcopy(overrides))
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(train.get(key), dict):
+            train[key].update(deepcopy(value))
+        else:
+            train[key] = deepcopy(value)
     return train
 
 

@@ -4,10 +4,15 @@ ALS 8.3.2 micro-CT reconstruction and self-supervised denoising on NERSC.
 The repository extends [Noise2Inverse360](https://github.com/tomography/Noise2Inverse360)
 with a NAFNet-based 2.5D model and an ALS reconstruction workflow.
 
-The [v3.4 notebook](notebooks/Noise2Inverse360_HPC_v3.4.ipynb) reconstructs
+The [v3.5 notebook](notebooks/Noise2Inverse360_HPC_v3.5.ipynb) reconstructs
 full, even-angle and odd-angle TIFF stacks, estimates the center of rotation
 with TomoPy Vo, and manages reconstruction queues, training and inference.
 Reusable notebook code is in `workflow/src/krg_workflow`.
+
+v3.5 adds fixed held-out validation, plateau learning-rate reduction, EMA
+weights and distance-aware axial fusion. It requires new NAFNet checkpoints.
+Independent training labels reuse reconstruction stacks while keeping model
+configs, logs, weights and inference outputs separate.
 
 The [training snooper](notebooks/Training_Snooper.ipynb) reads an active log in
 a separate kernel and produces the same loss-history plots without loading
@@ -31,7 +36,7 @@ python -m pip install --no-deps -e .
 export MPLBACKEND=Agg
 python examples/configure_nafnet.py --input /path/scan_config.yaml --output /path/scan_nafnet.yaml
 denoise train --config /path/scan_nafnet.yaml --gpus 0,1,2,3 --no-search --output-dir /path/TrainOutput_NAF
-denoise volume --config /path/scan_nafnet.yaml --model-dir /path/TrainOutput_NAF --checkpoint val
+denoise volume --config /path/scan_nafnet.yaml --model-dir /path/TrainOutput_NAF --checkpoint ema --output-dir /path/scan_v3_5_ema
 ```
 
 These commands require the backend dependencies and an allocated GPU session.

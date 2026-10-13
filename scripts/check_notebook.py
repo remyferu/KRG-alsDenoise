@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK = ROOT/'notebooks/Noise2Inverse360_HPC_v3.4.ipynb'
+NOTEBOOK = ROOT/'notebooks/Noise2Inverse360_HPC_v3.5.ipynb'
 
 
 def setup_text():

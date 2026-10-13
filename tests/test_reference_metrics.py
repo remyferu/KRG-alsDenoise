@@ -137,6 +137,30 @@ class HistoryMetricTests(unittest.TestCase):
             result = self.scope['plot_training_history'](log, Path(tmp)/'old_plots', show=False)
             self.assertEqual(result['epochs'], 1)
 
+    def test_v35_history_exports_ema_learning_rate_and_validation_scope(self):
+        text = 'Metric aggregation: scope=all_ranks; weighting=patches; validation=fixed_held_out\n'
+        for epoch in (1, 2, 3):
+            text += (f'Epoch {epoch}\n[Train] L1 loss: 2\n[Val] L1 loss: 2.1\n'
+                     '[Train] LCL loss: .02\n[Val] LCL loss: .03\n'
+                     '[Train] Total loss: 1.01\n[Val] Total loss: 1.065\n'
+                     '[EMA] Total loss: 1.04; averaged updates: 12\n'
+                     '[LearningRate] lr: 0.0005; reduced: True\n')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'train.log'
+            path.write_text(text, encoding='utf-8')
+            parsed = self.scope['parse_training_history'](path)
+            self.assertEqual(parsed['metadata']['metric_scope'], 'all_ranks')
+            self.assertEqual(parsed['metadata']['validation'], 'fixed_held_out')
+            self.assertEqual(parsed['rows'][-1]['ema_total'], 1.04)
+            self.assertEqual(parsed['rows'][-1]['learning_rate'], .0005)
+            self.assertTrue(parsed['rows'][-1]['lr_reduced'])
+            result = self.scope['plot_training_history'](path, Path(tmp)/'plots', moving_window=2, show=False)
+            with Path(result['paths']['csv']).open() as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows[-1]['ema_total'], '1.04')
+            self.assertEqual(rows[-1]['learning_rate'], '0.0005')
+            self.assertTrue(Path(result['paths']['png']).is_file())
+
     def test_total_loss_exports_include_the_logged_stopping_mean(self):
         text = ''
         for epoch, total in ((11, 1.2), (12, 1.), (13, .8)):

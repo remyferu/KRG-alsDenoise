@@ -55,8 +55,10 @@ def resolve_ssim_data_range(train, dataset):
     """Use an explicit/saved span, or derive one once from normalized train stacks."""
     value = train.get('ssim_data_range')
     if value is None:
-        low = min(float(dataset.split0.min()), float(dataset.split1.min()))
-        high = max(float(dataset.split0.max()), float(dataset.split1.max()))
+        plan = getattr(dataset, 'validation_plan', None)
+        stop = plan['normalization_planes'][1] if plan is not None else len(dataset.split0)
+        low = min(float(dataset.split0[:stop].min()), float(dataset.split1[:stop].min()))
+        high = max(float(dataset.split0[:stop].max()), float(dataset.split1[:stop].max()))
         value = high - low
     value = float(value)
     if not math.isfinite(value) or value <= 0:

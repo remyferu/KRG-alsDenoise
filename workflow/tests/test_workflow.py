@@ -74,13 +74,13 @@ class WorkflowTests(unittest.TestCase):
         cfg = dict(dataset=dict(directory_to_reconstructions=str(self.run.run_dir),
             full_recon_name=full.name,sub_recon_name0=even.name,sub_recon_name1=odd.name),
             train=training_settings(psz=16),infer=dict(window='cosine',overlap=.5))
-        path = self.run.run_dir/(full.name+'_config.yaml')
+        path = self.run.run_dir/(full.name+'_v3_5_1_config.yaml')
         path.write_text(yaml.safe_dump(cfg))
         return path
 
     def test_legacy_plans_restore_without_rewriting_identity(self):
         expected = reconstruction_identity(self.plan)
-        for version in ('3.0','3.1','3.2','3.3','3.4'):
+        for version in ('3.0','3.1','3.2','3.3','3.4','3.5'):
             saved = copy.deepcopy(self.plan)
             saved['provenance']['notebook_version'] = version
             json_write(self.run.plan_path,saved)
@@ -187,7 +187,7 @@ class WorkflowTests(unittest.TestCase):
             with Path(log).open('a') as stream:
                 stream.write('--mode --resume --no-search --architecture')
         with patch.dict(os.environ,CUDA_VISIBLE_DEVICES='0,1'),patch.object(api,'run_logged',side_effect=fake_logged):
-            training = api.configure_training(self.run,self.workspace,overrides={'psz':16})
+            training = api.configure_training(self.run,self.workspace,overrides={'psz':16,'validation':{'enabled':False}})
             command = api.training_command(self.run,self.workspace)
             self.assertNotIn('--resume',command)
             training.output.mkdir()
@@ -204,11 +204,42 @@ class WorkflowTests(unittest.TestCase):
             infer = api.inference_command(self.run,self.workspace,'slice',checkpoint='val',row=2)
             self.assertEqual(infer[infer.index('--gpus')+1],'0')
             self.assertEqual(infer[-2:],['--slice-number','2'])
-            self.assertTrue(str(api.denoised_path(self.run,'volume')).endswith('_denoised_volume_2.5d_nafnet25d'))
+            self.assertTrue(str(api.denoised_path(self.run,'volume')).endswith('_denoised_volume_2.5d_nafnet25d_v3_5_1_ema'))
             self.assertIsNone(api.train_run(self.run,self.workspace,enabled=False))
         with patch.object(api,'run_logged') as launcher:
             api.train_run(None,None,enabled=False)
             launcher.assert_not_called()
+
+    def test_fresh_training_labels_preserve_previous_configs_and_outputs(self):
+        self.write_stacks()
+        full, even, odd = api.reconstruction_paths(self.run)
+        old_config = self.run.run_dir/(full.name+'_config.yaml')
+        old_config.write_text('previous training YAML')
+        old_output = self.run.run_dir/'TrainOutput'
+        old_output.mkdir()
+        (old_output/'best_val_model.pth').write_bytes(b'previous model')
+        def fake_logged(parts, log, cwd, **kwargs):
+            Path(log).parent.mkdir(parents=True, exist_ok=True)
+            if '-h' in parts:
+                with Path(log).open('a') as stream:
+                    stream.write('--mode --resume --no-search --architecture')
+            else:
+                self.assertIn('prepare', parts)
+                config = Path(parts[parts.index('--config-output')+1])
+                config.write_text(yaml.safe_dump(dict(dataset=dict(
+                    directory_to_reconstructions=str(self.run.run_dir), full_recon_name=full.name,
+                    sub_recon_name0=even.name, sub_recon_name1=odd.name), train={}, infer={})))
+        with patch.dict(os.environ, CUDA_VISIBLE_DEVICES='0,1'), patch.object(api, 'run_logged', side_effect=fake_logged):
+            first = api.configure_training(self.run, self.workspace, label='first',
+                overrides={'psz':16, 'validation':{'enabled':False}})
+            second = api.configure_training(self.run, self.workspace, label='second',
+                overrides={'psz':16, 'validation':{'enabled':False}})
+            command = api.training_command(self.run, self.workspace)
+        self.assertNotEqual(first.config, second.config)
+        self.assertNotEqual(first.log_path, second.log_path)
+        self.assertEqual(command[command.index('--output-dir')+1], str(second.output))
+        self.assertEqual(old_config.read_text(), 'previous training YAML')
+        self.assertEqual((old_output/'best_val_model.pth').read_bytes(), b'previous model')
 
     def test_runtime_subprocess_agg_and_clean_live_tail(self):
         lines = []

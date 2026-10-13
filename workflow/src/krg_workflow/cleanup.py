@@ -9,7 +9,13 @@ from .plans import read_plan, reconstruction_identity, validate_plan
 def cleanup_categories(saved):
     rec = validate_plan(saved)['reconstruction']
     stem = Path(rec['source']['path']).stem
-    return dict(cor=['auto_cor', 'auto_cor_vo', 'cor_preview', 'manual_cor_previews'], projection_views=['projection_views'], full=[rec['outputs']['full']], even=[rec['outputs']['even']], odd=[rec['outputs']['odd']], denoised=[stem + '_denoised_slices', stem + '_denoised_volume_2.5d', stem + '_denoised_volume_3d', stem + '_denoised_slices_nafnet25d', stem + '_denoised_volume_2.5d_nafnet25d'], logs=['logs'], training=['TrainOutput', rec['outputs']['full'] + '_config.yaml'])
+    categories = dict(cor=['auto_cor', 'auto_cor_vo', 'cor_preview', 'manual_cor_previews'], projection_views=['projection_views'], full=[rec['outputs']['full']], even=[rec['outputs']['even']], odd=[rec['outputs']['odd']], denoised=[stem + '_denoised_slices', stem + '_denoised_volume_2.5d', stem + '_denoised_volume_3d', stem + '_denoised_slices_nafnet25d', stem + '_denoised_volume_2.5d_nafnet25d'], logs=['logs'], training=['TrainOutput', rec['outputs']['full'] + '_config.yaml'])
+    root = Path(saved['run_dir'])
+    for pattern in ('TrainOutput_*', rec['outputs']['full']+'_*_config.yaml'):
+        categories['training'].extend(sorted(path.name for path in root.glob(pattern)))
+    for pattern in (stem+'_denoised_slices_*', stem+'_denoised_volume_*'):
+        categories['denoised'].extend(path.name for path in root.glob(pattern) if path.name not in categories['denoised'])
+    return categories
 
 
 def cleanup_boundary(saved, output_root, *, protected_paths=()):

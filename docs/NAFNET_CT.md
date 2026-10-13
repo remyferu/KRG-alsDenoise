@@ -8,7 +8,7 @@ HTML viewer supports zoom and pan.
 ## Install on NERSC
 
 Follow [NERSC setup](SETUP_NERSC.md) for environment installation, kernel
-registration and compute allocation. The guide is also included in the v3.4
+registration and compute allocation. The guide is also included in the v3.5
 notebook.
 
 Use `als832` as the notebook kernel for reconstruction. The notebook launches
@@ -63,8 +63,11 @@ MPLBACKEND=Agg OMP_NUM_THREADS=1 denoise train \
 
 Resume with the same command plus `--resume`. Fresh training refuses an existing
 output directory. The 2.5D/3D baseline checkpoints cannot resume or fine-tune the
-NAFNet architecture. New checkpoints include their architecture, slice count and
-model options; all three commands check those against the config.
+NAFNet architecture. v3.5 uses model specification and resume format version 2;
+earlier NAFNet checkpoints are incompatible. New checkpoints include their
+architecture, slice count and model options; all commands check those against
+the config. Keep existing results and select a new notebook `TRAIN_LABEL` or
+CLI `--output-dir`. Reconstruction TIFF stacks can be reused unchanged.
 
 Training uses symmetric paired L1, with weighted LCL added after warmup.
 Early stopping monitors a trailing average of evaluation total loss, using the
@@ -77,6 +80,24 @@ train:
   patience: 100
   early_stopping_window: 10
   min_delta: 0.001
+  nafnet:
+    distance_aware: true
+  validation:
+    enabled: true
+    fraction: 0.1
+    samples: 128
+    seed: 1729
+  lr_schedule:
+    enabled: true
+    factor: 0.5
+    patience: 25
+    cooldown: 5
+    min_lr: 0.00001
+    refinement_epochs: 30
+  ema:
+    enabled: true
+    decay: 0.999
+    evaluate_every: 1
 ```
 
 Warmup and its transition epoch are excluded. The first complete post-warmup
@@ -90,19 +111,81 @@ the notebook preset uses 100.
 The raw L1, LCL and EDGE checkpoints retain their original selection criteria.
 Monitor history, best qualifying mean, epoch and patience counter are saved in
 `resume.pth`. Resuming with the same window and threshold restores the monitor
-exactly; changing either starts a fresh window. Older checkpoints also start a
-fresh window because they do not identify eligible post-warmup history. Existing
-YAML without the new fields uses window 10 and `min_delta=0.001`.
+exactly; changing either starts a fresh monitor and scheduler history. The
+validation plan and warmup length must match the resume checkpoint.
 
 The `[EarlyStopping]` log reports collection progress or the monitored mean and
 patience count. History exports include training/evaluation total loss and the
 logged monitor curve. `MOVING_AVERAGE_EPOCHS` changes display smoothing only;
 `train.early_stopping_window` controls stopping.
 
-Evaluation still samples the training dataset and uses the final GPU rank’s
-metrics. The learning rate remains constant. Future objective changes belong
-in the shared loss assembly so optimization and evaluation monitor the same
-quantity; reporting metrics do not enter the monitor.
+### Fixed validation
+
+The final `fraction` of axial planes is reserved, with at least `n_slices`
+planes in the held-out block. Training center indices stop before any input
+stack could touch that block. Validation centers start far enough inside it
+that their input stacks contain only held-out planes. Boundary stacks may
+repeat the volume's end plane. Normalization statistics and the default SSIM
+range use training planes only.
+
+Up to `samples` distinct center/row/column coordinates are selected with
+`seed` and recorded in `TrainOutput_<label>/validation.json`. They remain
+fixed, without augmentation. If the available coordinate count is smaller,
+all available crops are used. Resume checks geometry, coordinates, source
+paths and normalization against the saved plan.
+
+GPU ranks evaluate nonoverlapping index shards without padding duplicates.
+Metric sums are weighted by the number of patches in each batch and reduced
+across all ranks; a rank with no validation patches contributes zero. LCL is
+the existing batch criterion, so its sample-weighted summary can change
+slightly when GPU count or batch size changes. Hold these fixed for comparisons.
+The target remains an independently reconstructed noisy split, not a clean
+reference. Inspect the held-out region to establish that it contains relevant
+sample structures.
+
+Fixed axial validation is supported in 2.5D. In 3D it is disabled by default;
+evaluation continues to resample training patches, with metrics aggregated
+across ranks.
+
+### Learning-rate reduction
+
+`ReduceLROnPlateau` watches the raw model's complete trailing total-loss mean
+after warmup, with the same absolute `min_delta` as stopping. It halves the
+learning rate after its plateau patience, observes a five-epoch cooldown and
+stops reducing at `min_lr`. The initial LR remains `train.lr`.
+
+An LR reduction preserves the best loss and its patience count, but postpones
+early stopping until `refinement_epochs` have elapsed after the most recent
+reduction. This allows refinement without labeling an LR change as a loss
+improvement. Scheduler state and the last reduction epoch are saved on resume.
+Every rank applies the same decision from the globally aggregated loss.
+
+### EMA inference weights
+
+EMA weights are seeded from the first optimizer update after warmup. Later
+updates apply `average = decay * average + (1 - decay) * current` in FP32;
+buffers are copied from the raw model. EMA weights never receive gradients.
+The default decay is 0.999 and `evaluate_every=1`; larger intervals reduce
+the extra validation work.
+
+EMA is evaluated on the same fixed patches as the raw model. Its lowest
+post-warmup total loss selects `best_ema_model.pth`. Use `--checkpoint ema`
+for CLI inference; v3.5 notebook inference defaults to `CHECKPOINT='ema'`.
+Raw `val`, `lcl` and `edge` checkpoints remain independent. The raw model's
+evaluation total still controls LR scheduling and stopping. EMA weights,
+averaging count and best score are stored in `resume.pth`.
+
+### Distance-aware axial fusion
+
+The shared neighbor-gate convolutions produce logits with `stem_width`
+channels. A trainable bias indexed by `abs(neighbor - center)` is added before
+sigmoid. Opposite neighbors at the same distance share the bias; different
+distances have separate channel biases, initialized to `-log(distance)`.
+The correction remains `sum(gate * (neighbor - center)) / (n_slices - 1)`.
+
+At five slices and stem width 16, distance awareness adds 32 parameters for
+a total of 989,777. `distance_aware: false` disables it for a fresh ablation
+run; it is part of checkpoint geometry and cannot change on resume.
 
 ### Reference L2 and SSIM losses
 
@@ -114,8 +197,8 @@ noisy paired target. They do not measure clean-reference accuracy.
 
 New metrics average the two prediction directions. The existing L1/LCL log lines
 retain their original convention of summing those directions, so their scale is
-unchanged. Epoch summaries average the batch values from the final GPU rank,
-matching the scope of the existing logs. For 2.5D, both metrics compare the output
+unchanged. Epoch summaries use sample-weighted batch values across all GPU
+ranks. For 2.5D, both metrics compare the output
 with the opposite split's center slice. For 3D, MSE uses the whole patch and SSIM
 uses the center axial plane, as do the existing LCL/EDGE diagnostics.
 
@@ -127,12 +210,13 @@ YAML. Resume reuses it. Set a positive range explicitly for controlled compariso
 different ranges change SSIM values. Inputs are neither clipped nor rescaled per
 batch, and SSIM loss is not a percentage.
 
-Each completed epoch updates `TrainOutput/results/reference_metrics.csv` (or the
+Each completed epoch updates `TrainOutput_<label>/results/reference_metrics.csv` (or the
 equivalent custom output directory), including the range and window settings.
-Reference history is retained in `resume.pth`. Resuming an older checkpoint starts
-reference history at the next epoch; earlier epochs have no reference measurements.
-The v3.4 history cell also extracts the optional metrics into its CSV and adds two
+Reference history is retained in v3.5 `resume.pth` checkpoints.
+The v3.5 history cell also extracts the optional metrics into its CSV and adds two
 plot panels when they are present. Old L1/LCL-only logs still work.
+New logs also add an EMA total-loss overlay and an LR panel; CSV exports retain
+the raw EMA values, learning rate and reduction flag for each epoch.
 
 [Training_Snooper.ipynb](../notebooks/Training_Snooper.ipynb) displays the same
 plots concurrently in a separate kernel. It reads a bounded log snapshot and
@@ -142,13 +226,15 @@ writes separate exports; model state and training outputs are not modified.
 
 ```bash
 denoise slice --config /path/to/sample_nafnet_config.yaml \
-  --model-dir /path/to/TrainOutput_NAF --checkpoint val --slice-number 300
+  --model-dir /path/to/TrainOutput_NAF --checkpoint ema --slice-number 300 \
+  --output-dir /path/to/sample_v3_5_ema_slices
 denoise volume --config /path/to/sample_nafnet_config.yaml \
-  --model-dir /path/to/TrainOutput_NAF --checkpoint val
+  --model-dir /path/to/TrainOutput_NAF --checkpoint ema \
+  --output-dir /path/to/sample_v3_5_ema_volume
 ```
 
-NAFNet output directories end in `_nafnet25d`. Use `--output-dir` for a distinct
-comparison directory, especially when comparing `val`, `lcl`, and `edge` models.
+Notebook output directories include the training label and checkpoint choice.
+For CLI comparisons, use a distinct `--output-dir` for each raw or EMA model.
 Volume inference refuses an existing directory; a slice command replaces the
 requested slice in its selected directory. Do not edit the model architecture or
 slice count in a config after training.
@@ -169,7 +255,7 @@ maximum EDGE proves accurate geometry.
 ## Notebook and validation
 
 Fresh 2.5D notebook runs default to NAFNet. Set `TRAIN_ARCHITECTURE='unet'`
-for the baseline, using a new run label when changing architecture. CLI help is
+for the baseline, using a new training label when changing architecture. CLI help is
 checked for `--architecture` before training configuration. Earlier notebooks
 retain their original code.
 

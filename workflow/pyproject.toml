@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "krg-ct-workflow"
-version = "3.4.0"
+version = "3.5.0"
 maintainers = [{name = "Remy Feru", email = "remy.feru@utexas.edu"}]
 description = "ALS reconstruction and notebook orchestration without PyTorch"
 readme = "README.md"
