@@ -5,7 +5,7 @@
 For a first installation, follow [First-time NERSC setup](SETUP_NERSC.md). It covers
 source downloads, creating the ALS reconstruction and PyTorch environments,
 registering/selecting the Jupyter kernel, choosing a compute allocation, and input
-and output paths. It is also embedded in the v3.3 notebook; no earlier notebook is
+and output paths. It is also embedded in the v3.4 notebook; no earlier notebook is
 needed.
 
 Use `als832` as the notebook kernel for reconstruction. The notebook launches
@@ -87,7 +87,7 @@ matching the scope of the existing logs. For 2.5D, both metrics compare the outp
 with the opposite split's center slice. For 3D, MSE uses the whole patch and SSIM
 uses the center axial plane, as do the existing LCL/EDGE diagnostics.
 
-SSIM is evaluated in FP32 with an 11 × 11 Gaussian window, sigma 1.5, population
+SSIM is evaluated in FP32 with an 11 Ã— 11 Gaussian window, sigma 1.5, population
 covariance, and valid windows. It uses a fixed `train.ssim_data_range` measured
 in **normalized intensity units**. If absent, rank 0 computes the span from the
 minimum/maximum of both normalized training stacks once and saves it in the
@@ -99,7 +99,7 @@ Each completed epoch updates `TrainOutput/results/reference_metrics.csv` (or the
 equivalent custom output directory), including the range and window settings.
 Reference history is retained in `resume.pth`. Resuming an older checkpoint starts
 reference history at the next epoch; past missing measurements are not invented.
-The v3.3 history cell also extracts the optional metrics into its CSV and adds two
+The v3.4 history cell also extracts the optional metrics into its CSV and adds two
 plot panels when they are present. Old L1/LCL-only logs still work.
 
 ## Infer and compare fine features
@@ -125,14 +125,14 @@ sizes are padded and cropped internally. NAFNet channel attention pools over the
 patch, so use the same patch size for training and inference.
 
 Architecture alone does not guarantee tiny-feature retention. Compare the same
-2–5 pixel features against the original reconstructions, inspect residuals and
+2â€“5 pixel features against the original reconstructions, inspect residuals and
 measure feature contrast/diameter. Compare the original U-Net and this model at
 the same slice count, data splits and training budget. Neither minimum LCL nor
 maximum EDGE proves accurate geometry.
 
 ## Notebook and validation
 
-The v3.3 notebook is a standalone guide with setup, reconstruction, COR, queue,
+The v3.4 notebook is a standalone guide with setup, reconstruction, COR, queue,
 zoom, live log and history instructions. It uses NAFNet by default for fresh 2.5D
 runs. Choose a new run
 label for a new architecture. It requires this repository's backend, checked via
@@ -146,7 +146,7 @@ skipped by default. `examples/profile_nafnet.py` is an optional user-run synthet
 VRAM benchmark, not an estimate of scan accuracy or A100 throughput.
 
 Four GPU ranks still hold separate copies of both full stacks in CPU RAM. For
-624 × 2560 × 2560 float32 paired volumes this is about 122 GiB before other
+624 Ã— 2560 Ã— 2560 float32 paired volumes this is about 122 GiB before other
 allocations. Cropping before neighbor indexing avoids copying full detector
 planes for each training patch, but it does not share those volumes across ranks.
 

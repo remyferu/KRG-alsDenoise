@@ -109,14 +109,10 @@ class ReferenceMetricTests(unittest.TestCase):
 class HistoryMetricTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import re, uuid
-        import matplotlib.pyplot as plt
-        nb = json.loads((ROOT/'notebooks/Noise2Inverse360_HPC_v3.3.ipynb').read_text(encoding='utf-8'))
-        source = ''.join(next(c for c in nb['cells'] if c['id']=='training-helpers')['source'])
-        functions = [node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
-                     and node.name in ('parse_training_history', 'plot_training_history')]
-        cls.scope = dict(np=np, re=re, uuid=uuid, plt=plt, csv=csv, Path=Path)
-        exec(compile(ast.Module(body=functions, type_ignores=[]), 'history_helpers', 'exec'), cls.scope)
+        import sys
+        sys.path.insert(0,str(ROOT/'workflow/src'))
+        from krg_workflow.history import parse_training_history, plot_training_history
+        cls.scope = dict(parse_training_history=parse_training_history, plot_training_history=plot_training_history)
 
     def test_old_and_new_logs_export_and_plot_optional_metrics(self):
         old = ('Epoch 1\n[Train] L1 loss: 1.1\n[Train] LCL loss: 0\n'

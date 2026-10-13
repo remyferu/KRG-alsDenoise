@@ -6,7 +6,8 @@ import os
 
 import sphinx_rtd_theme
 
-sys.path.insert(0, os.path.abspath('..'))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 # -- General configuration ------------------------------------------------
 

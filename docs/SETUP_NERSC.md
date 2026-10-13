@@ -20,9 +20,9 @@ The source checkouts contain code, while the Conda prefixes contain Python and
 installed packages. Cloning a repository alone does not install its dependencies.
 
 This notebook reconstructs through ALS/TomoPy/ASTRA; no Tomocupy environment is
-required. Cell 21 runs `denoise prepare` to create a training YAML. That command
+required. The Configure training cell runs `denoise prepare` to create a training YAML. That command
 may print Tomocupy reconstruction examples inherited from the original CLI;
-ignore those examples here because cells 17–19 already produce/check the paired
+ignore those examples here because cells 17â€“19 already produce/check the paired
 stacks using ALS.
 
 If an ALS-provided `microCT` environment is already working, you may use it for
@@ -31,7 +31,7 @@ the kernel after verifying the imports below. The
 beamline-specific service. The private installation below is an alternative for
 standard Perlmutter Jupyter sessions. Their filesystem mounts may differ.
 
-### 2. Create directories and download the source — login-node terminal
+### 2. Create directories and download the source â€” login-node terminal
 
 Log in to NERSC through SSH, or use a login-node Jupyter terminal for lightweight
 installation work. Use a compute allocation for expensive compilation or data
@@ -55,7 +55,7 @@ clone URL. If a directory already exists, inspect it and reuse the checkout;
 do not rerun `git clone` into it or replace it. The ALS commit above matches the
 backend reviewed for this notebook.
 
-### 3. Install the ALS reconstruction environment — login-node terminal
+### 3. Install the ALS reconstruction environment â€” login-node terminal
 
 For a fresh private installation, create `als832` from the pinned ALS source's
 environment file, then add the notebook's supporting packages:
@@ -69,6 +69,8 @@ conda env create --prefix "$CT_SOFTWARE_DIR/als832" \
 conda activate "$CT_SOFTWARE_DIR/als832"
 conda install -c conda-forge h5py tifffile pyyaml pillow numexpr ipywidgets ipykernel
 python -c 'import tomopy, dxchange, astra, h5py, tifffile, yaml, PIL, ipywidgets; print("ALS imports OK")'
+python -m pip install --no-deps -e "$CT_SOURCE_DIR/KRG-alsDenoise/workflow"
+krg-workflow doctor
 python -m ipykernel install --user --name als832-n2i \
   --display-name "ALS CT + N2I notebook"
 ```
@@ -80,13 +82,19 @@ existing working ALS environment and resolve the solver error before proceeding;
 do not install TomoPy into n2i as a substitute. `ipywidgets` is needed by the ALS
 backend itself. Zoom displays do not require an interactive Matplotlib backend.
 
-In JupyterLab choose **Kernel → Change Kernel → ALS CT + N2I notebook**. Reload
+In JupyterLab choose **Kernel â†’ Change Kernel â†’ ALS CT + N2I notebook**. Reload
 JupyterLab if the kernel is missing. Changes to an already running kernel's
 environment require a kernel restart. The first code cell prints `sys.executable`;
 for this installation it should end in `microct-n2i-envs/als832/bin/python`.
 See the [NERSC custom-kernel procedure](https://docs.nersc.gov/services/jupyter/how-to-guides/#how-to-use-a-conda-environment-as-a-python-kernel).
 
-### 4. Install the denoising environment — login-node terminal
+The `krg-ct-workflow` package lives in `workflow/` and requires no Torch. Its
+scientific dependencies are supplied by the ALS environment, so use `--no-deps`
+to preserve those compatible versions. If pip/setuptools is too old for editable
+installation, install `setuptools>=61,<76` and `pip<25.1` inside this Python 3.8
+environment, then retry. Restart the notebook kernel after installing/updating it.
+
+### 4. Install the denoising environment â€” login-node terminal
 
 For a new n2i prefix, install a CUDA-enabled PyTorch build and this package with
 its dependencies. The example uses an official PyTorch 2.7.1 / CUDA 11.8 wheel;
@@ -114,14 +122,14 @@ skip `conda create` and the dependency installations; activate that prefix and r
 `python -m pip install --no-deps -e "$HOME/microct-n2i-source/KRG-alsDenoise"`,
 then check imports and CLI help. `--no-deps` is only for an environment with the
 dependencies already installed. The repository's original
-`envs/denoise_environment.yml` is a machine-specific upstream export, not the
+`envs/legacy/denoise_environment.yml` is a machine-specific upstream export, not the
 portable first-time recipe for this notebook.
 
 ### 5. Start Jupyter on a compute allocation
 
 Open [NERSC JupyterHub](https://jupyter.nersc.gov/), start a **single-node GPU**
 compute server and open
-`microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.3.ipynb`.
+`microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.4.ipynb`.
 For the full-volume example, choose **Exclusive GPU Node**, or a Configurable job
 with sufficient host RAM and time. NERSC documents four GPUs and full node memory
 for the exclusive GPU configuration; a shared GPU server has one GPU and a
@@ -147,7 +155,7 @@ environment needs site CUDA modules, apply them through a kernel/helper wrapper
 following [NERSC's helper instructions](https://docs.nersc.gov/services/jupyter/how-to-guides/#how-to-customize-a-kernel-with-a-helper-shell-script).
 The absolute executable path alone cannot repair a missing native runtime.
 
-### 6. Stage the scan and edit cell 10
+### 6. Stage the scan and edit cell 2
 
 The notebook does not download or copy scan data. Put your raw HDF5 scan in a
 directory visible from the compute kernel. On standard Perlmutter, an example is
@@ -155,10 +163,10 @@ directory visible from the compute kernel. On standard Perlmutter, an example is
 the file meets the projection/flat/dark/metadata requirements in **Read this first**.
 Reconstructed TIFFs alone are insufficient for the notebook's projection splitting.
 
-| Cell 10 input | What to enter |
+| Cell 2 input | What to enter |
 |---|---|
-| `INPUT_SUBFOLDER` / `INPUT_ROOT` | Folder containing your raw `.h5`/`.hdf5` files; replace the example folder or use an explicit absolute `Path` |
-| `PREFERRED_FILE` | Raw scan filename; confirm the selected scan in cell 11 |
+| `INPUT_ROOT` | Folder containing your raw `.h5`/`.hdf5` files; replace the example folder or use an explicit absolute `Path` |
+| `SCAN_PATH` | Absolute raw scan path; confirm it in cell 3 |
 | `RUN_LABEL` | A name for this scan's particular COR/settings/model combination; use a new label when those change |
 | `ALS_MICROCT_DIR` | Checkout containing `backend/ALS_recon_helper.py`, normally `Path.home() / 'microct-n2i-source' / 'microct'` |
 | `DENOISE_CMD` | `[str(Path.home() / 'microct-n2i-envs' / 'n2i' / 'bin' / 'denoise')]` |
@@ -176,7 +184,7 @@ large input copies, TIFFs and active model outputs. Standard output layout:
 
 ```text
 $HOME/microct-n2i-source/microct/backend/ALS_recon_helper.py
-$HOME/microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.3.ipynb
+$HOME/microct-n2i-source/KRG-alsDenoise/notebooks/Noise2Inverse360_HPC_v3.4.ipynb
 $HOME/microct-n2i-envs/als832/         # notebook Python
 $HOME/microct-n2i-envs/n2i/           # denoising Python
 $PSCRATCH/noise2inverse360/<scan>/<RUN_LABEL>/
@@ -193,7 +201,7 @@ $PSCRATCH/noise2inverse360/reconstruction_queue_v3.json
 ```
 
 The selected output root can differ from this example. Full/even/odd float32
-stacks for 624 × 2560 × 2560 occupy about 46 GiB on disk. Training with four
+stacks for 624 Ã— 2560 Ã— 2560 occupy about 46 GiB on disk. Training with four
 processes holds about 122 GiB of paired input arrays in host RAM before overhead.
 GPU VRAM is separate from host RAM. Read the volume section for its additional
 memory needs. Scratch is working storage; preserve accepted data and small run
@@ -209,10 +217,13 @@ git status --short
 git pull --ff-only
 ```
 
+For the first upgrade from v3.3, also activate the ALS environment and install
+`python -m pip install --no-deps -e "$HOME/microct-n2i-source/KRG-alsDenoise/workflow"`.
+Open the new v3.4 notebook; the v3.3 notebook remains available.
+
 Preserve your own notebook edits before pulling. Editable installation reads code
 from this checkout, so routine code updates need no package reinstall; changed
-dependencies or entry points do. Reopen the updated notebook and restart/load its
-helper cells. Do not update the pinned ALS checkout during an active run: changing
+dependencies or entry points do. Reopen the updated notebook and restart its kernel and rerun initialization. Do not update the pinned ALS checkout during an active run: changing
 backend files invalidates its saved source identity.
 
 ### Setup troubleshooting
@@ -225,7 +236,7 @@ backend files invalidates its saved source identity.
 | Invalid `matplotlib_inline` backend in the CLI | Confirm the subprocess uses `MPLBACKEND=Agg`; the notebook's launcher sets it |
 | NumExpr thread-count error | Restart the kernel and run cell 1 first. If NumExpr is preloaded, set `NUMEXPR_MAX_THREADS` in the kernel launcher to at least the host's detected logical CPU count before Python starts |
 | Kernel remains missing | Reload JupyterLab after registration; check the kernelspec points to an existing ALS Python |
-| No accessible scratch or scan folder | Set cell 10's input and scratch paths to locations visible on the actual compute node |
+| No accessible scratch or scan folder | Set cell 2's input and scratch paths to locations visible on the actual compute node |
 
 If NumExpr loads before cell 1, inspect the host CPU count with
 `getconf _NPROCESSORS_ONLN` in the compute-session terminal. In JupyterLab's text
@@ -244,7 +255,7 @@ logical CPU count. Keep valid JSON commas between the existing fields, then
 restart the kernel. Cell 1 reduces the initial active count to the available CPU
 limits. [NERSC kernel environment instructions](https://docs.nersc.gov/services/jupyter/how-to-guides/#how-to-set-environment-variables-for-a-python-kernel).
 
-Proceed with cells **1–9** to load the notebook helpers, then follow **Workflow and
-restart**. Training stays disabled until you explicitly enable cell 22. The full
+Proceed with cells **1â€“9** to load the notebook helpers, then follow **Workflow and
+restart**. Training stays disabled until you explicitly enable cell 13. The full
 NERSC installation and reconstruction have not been executed by this documentation
 review. [Denoising details](NAFNET_CT.md) cover architecture and loss settings.

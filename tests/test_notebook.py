@@ -2,11 +2,13 @@
 import ast
 import json
 import unittest
+import sys
 from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK = ROOT/'notebooks/Noise2Inverse360_HPC_v3.3.ipynb'
+NOTEBOOK = ROOT/'notebooks/Noise2Inverse360_HPC_v3.4.ipynb'
+sys.path.insert(0,str(ROOT/'workflow/src'))
 
 
 class NotebookTests(unittest.TestCase):
@@ -23,12 +25,7 @@ class NotebookTests(unittest.TestCase):
                 self.assertIsNone(cell['execution_count'])
 
     def test_config_accepts_nafnet_with_seven_or_nine_slices(self):
-        parsed = ast.parse(self.sources['training-helpers'])
-        function = next(node for node in parsed.body if isinstance(node, ast.FunctionDef)
-                        and node.name == 'validate_denoise_config')
-        module = ast.Module(body=[function], type_ignores=[])
-        scope = dict(np=np)
-        exec(compile(module, 'notebook_config_validator', 'exec'), scope)
+        from krg_workflow.denoising import validate_denoise_config
         root = Path('/scratch/run')
         for k in (5, 7, 9):
             cfg = dict(dataset=dict(directory_to_reconstructions=str(root), full_recon_name='full',
@@ -37,20 +34,27 @@ class NotebookTests(unittest.TestCase):
                                    psz=256, n_slices=k, mbsz=4, maxep=2000, warmup=2000,
                                    patience=100, lr=.001, z_stride=1),
                         infer=dict(window='cosine', overlap=.5))
-            scope['validate_denoise_config'](cfg, root, root/'full', root/'even', root/'odd',
+            validate_denoise_config(cfg, root, root/'full', root/'even', root/'odd',
                                              2560, nrows=624, volume=True)
 
-    def test_compatibility_guards_and_outputs(self):
-        self.assertIn("'--architecture'", self.sources['configure-training'])
-        self.assertIn('Saved architecture differs', self.sources['configure-training'])
-        for name in ('volume', 'single-slice', 'cleanup-helpers'):
-            self.assertIn('_nafnet25d', self.sources[name])
-        self.assertIn('RUN_TRAINING = False', self.sources['train'])
-        self.assertIn('if not RUN_TRAINING:', self.sources['train'])
-        self.assertIn("env['MPLBACKEND'] = 'Agg'", self.sources['core-helpers'])
-        self.assertIn("'3.0', '3.1', '3.2', '3.3'", self.sources['core-helpers'])
-        self.assertIn('zoom_image_viewer', self.sources['single-slice'])
-        self.assertIn('plot_training_history', self.sources['train'])
+    def test_short_actions_and_training_opt_in(self):
+        self.assertEqual(len([c for c in self.nb['cells'] if c['cell_type']=='code']),20)
+        code = '\n'.join(''.join(c['source']) for c in self.nb['cells'] if c['cell_type']=='code')
+        self.assertNotIn('globals()',code)
+        self.assertNotIn('def ',code)
+        self.assertIn('RUN_TRAINING = False',self.sources['train'])
+        self.assertIn('enabled=RUN_TRAINING',self.sources['train'])
+        self.assertIn('live_log_box()',self.sources['train'])
+        self.assertIn('krg_workflow.__version__',self.sources['imports'])
+        for path in (ROOT/'workflow/src/krg_workflow').glob('*.py'):
+            ast.parse(path.read_text(encoding='utf-8'),feature_version=(3,8))
+
+    def test_setup_includes_workflow_and_als_installation(self):
+        setup = self.sources['installation-and-workspace']
+        self.assertIn('conda env create',setup)
+        self.assertIn('KRG-alsDenoise/workflow',setup)
+        self.assertIn('ALS CT + N2I notebook',setup)
+        self.assertIn('python=3.11',setup)
 
 
 if __name__ == '__main__':

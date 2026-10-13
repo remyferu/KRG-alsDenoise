@@ -8,6 +8,7 @@ build/
 
 # Sphinx build output
 docs/_build/
+docs/legacy/sphinx/_build/
 docs/bibtex.json
 
 # PyTorch / training artefacts

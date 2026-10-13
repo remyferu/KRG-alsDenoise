@@ -30,3 +30,11 @@ and existing checkpoint/early-stopping criteria.
 The HPC notebook derives from the user's Noise2Inverse360 workflow v3.2. It retains
 native Vo centering, queues, linked zoom displays, live log output, and automatic
 loss-history plots, with NAFNet configuration added in v3.3.
+
+v3.4 extracts these notebook helpers into `workflow/src/krg_workflow`, adds explicit
+run state and shared presets, and keeps the historical notebooks unmodified.
+Backend configuration, checkpoint loading and training loader construction are
+separated into helpers; `denoise/__init__.py` uses lazy legacy exports. Training
+losses, checkpoint formats and epoch-loop behavior are unchanged. Original
+documentation and the machine-specific environment export are retained under
+`docs/legacy/` and `envs/legacy/`.

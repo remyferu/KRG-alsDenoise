@@ -1,0 +1,9 @@
+# Portable starting environment; select the prefix at creation time.
+# CUDA-enabled Torch and the editable backend are installed separately; see README.md.
+name: n2i
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy<2.0
