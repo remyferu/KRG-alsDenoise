@@ -160,6 +160,13 @@ reduction. This allows refinement without labeling an LR change as a loss
 improvement. Scheduler state and the last reduction epoch are saved on resume.
 Every rank applies the same decision from the globally aggregated loss.
 
+The displayed patience counter can exceed its limit during this interval.
+When patience is exhausted, the log reports the remaining refinement epochs
+and the earliest permitted stopping epoch. Another LR reduction can move that
+epoch later. Set `train.lr_schedule.refinement_epochs: 0` to stop as soon as
+patience is exhausted. Settings are read at process startup; editing the YAML
+does not change an already running job.
+
 ### EMA inference weights
 
 EMA weights are seeded from the first optimizer update after warmup. Later

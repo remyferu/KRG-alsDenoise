@@ -143,6 +143,41 @@ class SchedulerTests(unittest.TestCase):
         self.assertFalse(any(stop for stop, _ in decisions[:7]))
         self.assertTrue(decisions[7][0])
 
+    def test_default_refinement_explains_counter_above_patience_and_expires_exactly(self):
+        optimizer = torch.optim.Adam([nn.Parameter(torch.zeros(()))], lr=.001)
+        options = plateau_options(dict(lr=.001))
+        controller = PlateauController(optimizer, options, .001, window=10)
+        stopping = MovingAverageEarlyStopping(patience=100, window=10, min_delta=.001)
+        stopped_at = None
+        for epoch in range(1, 149):
+            stop, reduced = update_training_controls(stopping, controller, epoch, 1., epoch <= 20)
+            if epoch == 130:
+                self.assertEqual(stopping.epochs_since_improvement, 100)
+                self.assertEqual(controller.refinement_remaining(epoch), 18)
+                self.assertFalse(stop)
+            if epoch == 140:
+                self.assertEqual(stopping.epochs_since_improvement, 110)
+                self.assertEqual(controller.refinement_remaining(epoch), 8)
+                self.assertFalse(stop)
+            if stop:
+                stopped_at = epoch
+                break
+        self.assertEqual(stopped_at, 148)
+        self.assertEqual(controller.refinement_remaining(stopped_at), 0)
+
+    def test_zero_refinement_stops_at_patience_even_on_a_reduction_epoch(self):
+        optimizer = torch.optim.Adam([nn.Parameter(torch.zeros(()))], lr=.001)
+        options = plateau_options(dict(lr=.001, lr_schedule=dict(patience=1, refinement_epochs=0)))
+        controller = PlateauController(optimizer, options, .001, window=1)
+        stopping = MovingAverageEarlyStopping(patience=2, window=1, min_delta=.001)
+        for epoch in (1, 2):
+            self.assertFalse(update_training_controls(stopping, controller, epoch, 1., False)[0])
+        stop, reduced = update_training_controls(stopping, controller, 3, 1., False)
+        self.assertTrue(reduced)
+        self.assertTrue(stop)
+        self.assertEqual(stopping.epochs_since_improvement, 2)
+        self.assertEqual(controller.refinement_remaining(3), 0)
+
     def test_complete_window_after_warmup_and_resume_are_exact(self):
         optimizer, controller, stopping = self.controls()
         stopping = MovingAverageEarlyStopping(patience=100, window=2)

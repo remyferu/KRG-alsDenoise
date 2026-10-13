@@ -439,6 +439,11 @@ def run(args):
                      'epochs without improvement: %s' %
                      (stopping.current_mean, stopping.best_mean, stopping.best_epoch,
                       patience_status))
+            refinement_left = controller.refinement_remaining(epoch)
+            if patience > 0 and stopping.epochs_since_improvement >= patience and refinement_left:
+                log.info('[EarlyStopping] Patience exhausted; LR refinement has %d epochs remaining; '
+                         'earliest permitted stop epoch: %d (last LR reduction: epoch %d)' %
+                         (refinement_left, epoch + refinement_left, controller.last_reduction_epoch))
         elif continue_warmup:
             log.info('[EarlyStopping] Waiting for warmup to finish.')
         else:

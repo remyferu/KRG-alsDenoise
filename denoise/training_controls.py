@@ -70,9 +70,13 @@ class PlateauController:
             self.last_reduction_epoch = epoch
         return reduced
 
+    def refinement_remaining(self, epoch):
+        if self.last_reduction_epoch is None:
+            return 0
+        return max(0, self.last_reduction_epoch + self.options['refinement_epochs'] - epoch)
+
     def ready_to_stop(self, epoch):
-        return (self.last_reduction_epoch is None or
-                epoch-self.last_reduction_epoch >= self.options['refinement_epochs'])
+        return self.refinement_remaining(epoch) == 0
 
     def state_dict(self):
         return dict(version=1, options=dict(self.options), last_reduction_epoch=self.last_reduction_epoch,
