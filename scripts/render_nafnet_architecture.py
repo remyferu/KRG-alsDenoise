@@ -67,6 +67,7 @@ def render():
     metadata = source_model()
     DESTINATION.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({'font.family': 'DejaVu Sans', 'svg.fonttype': 'path',
+                         'svg.hashsalt': 'krg-nafnet25d-architecture',
                          'savefig.facecolor': 'white'})
     fig = plt.figure(figsize=(24, 36), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1])
@@ -271,7 +272,10 @@ def render():
         raise ValueError('Text exceeds diagram nodes: '+repr(overflow))
     for suffix in ('svg', 'png'):
         path = DESTINATION/('nafnet25d-architecture.'+suffix)
-        fig.savefig(path, dpi=160)
+        export_metadata = {'Date': None, 'Creator': 'KRG-alsDenoise architecture renderer'} if suffix == 'svg' else None
+        fig.savefig(path, dpi=160, metadata=export_metadata)
+        if suffix == 'svg':
+            path.write_text('\n'.join(line.rstrip() for line in path.read_text(encoding='utf-8').splitlines())+'\n', encoding='utf-8')
         print(path)
     plt.close(fig)
     (DESTINATION/'nafnet25d-architecture.json').write_text(json.dumps(metadata, indent=2)+'\n', encoding='utf-8')
