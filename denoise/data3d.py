@@ -1,16 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-3D dataset classes for Noise2Inverse volumetric denoising (--mode 3d).
+"""3D training patches and sliding-window inference for Noise2Inverse.
 
-Training  : TomoDataset3DTrain  — random cubic patch sampling with full 3D
-                                   geometric augmentation (24 rotational
-                                   symmetries of a cube + random flip).
-Inference : TomoDataset3DInfer  — sliding-window 3D grid extraction with
-                                   overlap-add stitching back to full volume.
-
-Augmentation strategy adapted from SSD_3D (Laugros et al., bioRxiv 2025).
+Paired augmentation uses cube rotations and a random flip, adapted from
+SSD_3D (Laugros et al., bioRxiv 2025).
 """
 
 import numpy as np
@@ -38,19 +32,7 @@ def save_normalization_value_3d(config_file, mean, std):
 # ---------------------------------------------------------------------------
 
 def geom_transform_3d(vol0: torch.Tensor, vol1: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply one of the 24 rotational symmetries of a cube, then optionally
-    flip horizontally.  The *same* transform is applied to both volumes so
-    the N2I pairing is preserved.
-
-    Parameters
-    ----------
-    vol0, vol1 : torch.Tensor, shape [1, D, H, W]
-
-    Returns
-    -------
-    vol0, vol1 : torch.Tensor, shape [1, D, H, W]  (transformed)
-    """
+    """Apply the same cube rotation and optional flip to two [1, D, H, W] patches."""
     direction      = torch.randint(0, 3, (1,)).item()
     channel_flip   = torch.randint(0, 2, (1,)).item()
     nb_rot         = torch.randint(0, 4, (1,)).item()
@@ -77,19 +59,10 @@ def geom_transform_3d(vol0: torch.Tensor, vol1: torch.Tensor) -> Tuple[torch.Ten
 # ---------------------------------------------------------------------------
 
 class TomoDataset3DTrain(Dataset):
-    """
-    Training dataset for 3D Noise2Inverse.
+    """Random cubic patches from two normalized TIFF stacks in CPU memory.
 
-    Loads two TIFF stacks (split0 / split1) into CPU memory as 3D NumPy
-    arrays [D, H, W], normalises them, and serves random cubic patches of
-    size psz_3d with 3D geometric augmentation.
-
-    Parameters
-    ----------
-    params : dict
-        Parsed YAML config (same structure as 2.5D).
-    config_file : str
-        Path to the YAML, used to save normalisation stats.
+    params contains the scan YAML; config_file receives normalization statistics.
+    Both splits use the same geometric augmentation.
     """
 
     def __init__(self, params: dict, config_file: str):
@@ -124,7 +97,6 @@ class TomoDataset3DTrain(Dataset):
         log.info("3D split0  mean=%.4f  std=%.4f  shape=%s" % (mean0, std0, self.split0.shape))
         log.info("3D split1  mean=%.4f  std=%.4f  shape=%s" % (mean1, std1, self.split1.shape))
 
-        # Expose stats so train.py can save them
         self.split0_mean = float(mean0)
         self.split0_std  = float(std0)
 
@@ -144,7 +116,6 @@ class TomoDataset3DTrain(Dataset):
         D, H, W = self.split0.shape
         psz = self.psz
 
-        # Random cubic patch origin
         d0 = np.random.randint(0, D - psz + 1)
         h0 = np.random.randint(0, H - psz + 1)
         w0 = np.random.randint(0, W - psz + 1)
@@ -156,7 +127,6 @@ class TomoDataset3DTrain(Dataset):
         t0 = torch.from_numpy(patch0).unsqueeze(0)
         t1 = torch.from_numpy(patch1).unsqueeze(0)
 
-        # Apply identical 3D geometric augmentation to both patches
         t0, t1 = geom_transform_3d(t0, t1)
 
         return t0, t1   # each [1, psz, psz, psz]
@@ -250,7 +220,6 @@ class TomoDataset3DInfer(Dataset):
         self.H_pad = _pad(H, self.psz, stride)
         self.W_pad = _pad(W, self.psz, stride)
 
-        # Pad the volume once
         pad_d = self.D_pad - D
         pad_h = self.H_pad - H
         pad_w = self.W_pad - W
@@ -264,7 +233,6 @@ class TomoDataset3DInfer(Dataset):
         self.h_pos = _positions_3d(self.H_pad, self.psz, stride)
         self.w_pos = _positions_3d(self.W_pad, self.psz, stride)
 
-        # Flat index of all patches
         self.index: List[Tuple[int, int, int]] = [
             (d, h, w)
             for d in self.d_pos
@@ -294,21 +262,10 @@ class TomoDataset3DInfer(Dataset):
         window: Literal['uniform', 'hann'] = 'hann',
         eps: float = 1e-6,
     ) -> np.ndarray:
-        """
-        Overlap-add stitching of 3D patch predictions.
+        """Blend [T, pd, ph, pw] predictions in dataset order.
 
-        Parameters
-        ----------
-        pred_patches : np.ndarray, shape [T, psz, psz, psz]
-            Model outputs in the same order as dataset iteration.
-        window : str
-            Blending window: 'hann' (recommended) or 'uniform'.
-        eps : float
-            Denominator safety term.
-
-        Returns
-        -------
-        vol : np.ndarray, shape [D, H, W]  (original unpadded size)
+        window selects Hann or uniform weights. Returns the selected depth range
+        cropped to the original volume dimensions; eps bounds weight normalization.
         """
         if pred_patches.shape[0] != len(self.index):
             raise ValueError(

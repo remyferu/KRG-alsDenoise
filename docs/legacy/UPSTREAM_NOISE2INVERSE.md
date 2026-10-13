@@ -4,33 +4,17 @@
 
 ## Overview
 
-This project provides an implementation of the Noise2Inverse (N2I)
-framework for self-supervised denoising of CT reconstructions — no
-clean ground-truth images required.  Two convolution modes are
-available, selected with `--mode`:
+Historical Noise2Inverse360 usage reference. Current ALS and NAFNet instructions
+are in [NERSC setup](../SETUP_NERSC.md) and [denoising usage](../NAFNET_CT.md).
 
-| Mode | Flag | Network | Best for |
-|------|------|---------|----------|
-| **2.5D** (default) | `--mode 2.5d` | 2D U-Net, stacks N adjacent slices as channels | General synchrotron CT; fast, memory-efficient |
-| **3D** | `--mode 3d` | Full 3D U-Net with skip connections | Coherent X-ray / XNH data; removes structured 3D noise and ring artifacts |
-
-### 2.5D mode
-Uses a lightweight 2D U-Net (no skip connections, GroupNorm, LeakyReLU)
-that takes a stack of adjacent axial slices as input channels.  This
-suppresses ring and streak artifacts while remaining fast and
-memory-efficient — suitable for large synchrotron CT datasets.
-
-### 3D mode
-Uses a full 3D U-Net with skip connections (Laugros et al., bioRxiv
-2025) that operates on cubic sub-volumes.  By processing all three
-spatial dimensions simultaneously, it can remove structured 3D noise
-such as probe-object mixing artifacts in X-ray holographic
-nanotomography (XNH) — noise that slice-by-slice processing cannot
-reach.  3D mode requires more GPU memory and is best suited for
-coherent X-ray microscopy data.
+Noise2Inverse trains on reconstructions from interleaved projection subsets,
+without clean target images. The upstream 2.5D U-Net takes neighboring slices
+as channels and predicts the center slice. The 3D U-Net processes cubic patches.
+Both training modes load paired stacks into host RAM; 3D convolutions require
+additional activation memory and computation.
 
 <p align="center">
-  <img src="docs/source/img/workflow.svg" width="100%">
+  <img src="sphinx/source/img/workflow.svg" width="100%">
 </p>
 
 ## Installation
@@ -59,31 +43,27 @@ Dependencies include:
 
 ## Assumptions
 
--   All output (training results, inference results, trained models) are
-    saved inside the reconstruction directory.
+Generated configurations and outputs normally use this layout:
 
-    -   User: John Smith
-        -   Sample 1 Directory:
-            -   Provided by the User:
-                -   Full Reconstruction (Directory)
-            -   Created by `tomocupy recon_steps` (tomocupy env):
-                -   Sub-Reconstruction 0 (Directory)
-                -   Sub-Reconstruction 1 (Directory)
-            -   Created by `denoise prepare` (denoise env):
-                -   `config.yaml`
-            -   Created by `denoise train` / inference:
-                -   TrainOutput (Directory)
-                -   `<sample>_denoised_slices/`
-                -   `<sample>_denoised_volume_2.5d/` or `<sample>_denoised_volume_3d/`
+```text
+<sample>/
+  <full_reconstruction>/
+  <sub_reconstruction_0>/
+  <sub_reconstruction_1>/
+  config.yaml
+  TrainOutput/
+  <sample>_denoised_slices/
+  <sample>_denoised_volume_2.5d/ or <sample>_denoised_volume_3d/
+```
 
 -   Data is saved as `.tiff` files (`.tif` or `.tiff`).
 
 -   Two model architectures are available, selected with `--mode`:
 
-    -   **2.5D** — 2D U-Net without skip connections + leaky ReLU + group
-        norm.  Robust across synchrotron beamlines.
-    -   **3D** — full 3D U-Net with skip connections (Laugros et al., 2025).
-        Recommended for coherent X-ray / XNH data with structured 3D noise.
+    -   **2.5D**: 2D U-Net without skip connections + leaky ReLU + group
+        norm.  Uses neighboring slices as input channels.
+    -   **3D**: full 3D U-Net with skip connections (Laugros et al., 2025).
+        Processes cubic patches for volumetric restoration.
 
 -   Inference can run while training is still in progress.
 
@@ -94,7 +74,7 @@ Dependencies include:
         OOM errors.
 -   Support for 2.5D and 3D inference with PyTorch
 -   Local model registry with instrument-fingerprint search and `--finetune` from prior models
--   Flexible plug-and-play workflow across different samples/users
+-   Configuration-driven processing of multiple samples
 
 ## Project Structure
 
@@ -140,23 +120,23 @@ pip install .
 
 ### Data preparation
 
-**Step 1 — write the config YAML** (run in the `denoise` environment):
+**Step 1: write the config YAML** (run in the `denoise` environment):
 
 ``` bash
 (denoise) $ denoise prepare --file-name /data/sample.h5
 ```
 
 This writes `sample_rec_config.yaml` (with instrument metadata read from
-the HDF5) and prints the two `tomocupy recon_steps` commands you need to
+the HDF5) and prints the two `tomocupy recon_steps` commands required to
 run next.  The generated YAML includes parameters for both 2.5D and 3D
-modes — the mode is chosen later at `denoise train` time with `--mode`.
+modes; the mode is chosen later at `denoise train` time with `--mode`.
 
 > **Note:** `denoise prepare` does **not** create the sub-reconstruction
 > directories.  Due to a NumPy compatibility issue between the `denoise`
 > and `tomocupy` environments, the sub-reconstructions must be created
 > manually by running the printed commands in the `tomocupy` environment.
 
-**Step 2 — create the sub-reconstructions** (run in the `tomocupy` environment):
+**Step 2: create the sub-reconstructions** (run in the `tomocupy` environment):
 
 ``` bash
 # even-indexed projections (0, 2, 4, ...)
@@ -175,17 +155,17 @@ modes — the mode is chosen later at `denoise train` time with `--mode`.
 ```
 
 `denoise prepare` prints the exact paths for `--out-path-name` derived
-from `--file-name`, so you can copy-paste them directly.
+from `--file-name`, for the selected scan.
 
 ### Training
 
 Before launching a new training run, `denoise train` automatically
 searches the local model registry (`~/.denoise/registry/`) for a model
 trained under the same instrument conditions.  If a match is found, it
-is listed and you are asked whether to proceed:
+is listed and the CLI prompts for confirmation:
 
 ``` bash
-# 2.5D mode (default — used when no --mode flag or mode stored in YAML)
+# 2.5D mode (default when mode is not specified)
 (denoise) $ denoise train --config /data/sample_rec_config.yaml --gpus 0,1
 
 # 3D mode
@@ -221,10 +201,10 @@ on a 4-GPU machine), assign a different `--master-port` to each job to
 avoid a port conflict:
 
 ``` bash
-# job 1 — GPUs 0,1, default port
+# Job 1: GPUs 0,1, default port
 (denoise) $ denoise train --config /data/delta_config.yaml --gpus 0,1 --no-search
 
-# job 2 — GPUs 2,3, different port
+# Job 2: GPUs 2,3, different port
 (denoise) $ denoise train --config /data/beta_config.yaml --gpus 2,3 --no-search --master-port 29501
 ```
 
@@ -260,7 +240,7 @@ denoise slice --config /data/sample_rec_config.yaml --slice-number 500
 
 -   Loads pretrained model, fetches slice ± neighboring slices (2.5D stack)
 -   Applies sliding-window patching, normalizes, saves `.tiff` to `<sample>_denoised_slices/`
--   **Not available in 3D mode** — use `denoise volume` instead
+-   **Not available in 3D mode**: use `denoise volume` instead
 
 ### Denoise Volume
 

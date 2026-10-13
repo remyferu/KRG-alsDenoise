@@ -4,7 +4,7 @@
 Usage:
     python 3dtiff_converter.py <input_dir> [output_dir]
 
-    input_dir  : directory containing delta_even.tiff, delta_odd.tiff, delta_all.tiff
+    input_dir  : directory containing beta_even.tiff, beta_odd.tiff, beta_all.tiff
     output_dir : where to write per-slice subdirectories (defaults to input_dir)
 """
 import sys

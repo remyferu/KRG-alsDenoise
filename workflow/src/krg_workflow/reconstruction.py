@@ -1,7 +1,4 @@
-"""Reconstruction helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""ALS reconstruction in row chunks with stage validation and resume."""
 from datetime import datetime, timezone
 from pathlib import Path
 import contextlib

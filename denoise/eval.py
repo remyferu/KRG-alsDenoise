@@ -12,7 +12,6 @@ def laplacian_batch(x):
     return F.conv2d(x, kernel, padding=1, groups=x.shape[1])
 
 def laplacian_entropy_map(lap, bins = 256):
-    # Compute entropy for each image in batch
     B = lap.shape[0]
     entropies = []
     for i in range(B):
@@ -37,11 +36,9 @@ def laplacian_score_batch(batch, entropy_thresh = .2, q = 0.9):
 
         if entropy < entropy_thresh:
             # flat image: reward smoothness
-            #score = -torch.mean(lap_i).item()
             smoothness = 1.0 / (lap_i.mean().item() + 1e-6)
             scores.append(smoothness)
         else:
-            # compute threshold using quantile
             threshold = torch.quantile(lap_i, q)
             edge_mask = lap_i > threshold
             flat_mask = ~edge_mask

@@ -30,7 +30,7 @@ CUDA 12.4, and all dependencies::
 Manual environment setup
 ------------------------
 
-For other machines or when you need a different CUDA version, create the
+For another machine or CUDA version, create the
 environment manually.
 
 Install from `Anaconda <https://www.anaconda.com/distribution/>`_ (Python 3.11 recommended)::
@@ -38,7 +38,7 @@ Install from `Anaconda <https://www.anaconda.com/distribution/>`_ (Python 3.11 r
     (base) $ conda create -n denoise python=3.11
     (base) $ conda activate denoise
 
-Install PyTorch with CUDA support (adjust the ``cu124`` tag to match your driver)::
+Install PyTorch with CUDA support (adjust the ``cu124`` tag for the installed driver)::
 
     (denoise) $ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
@@ -81,7 +81,7 @@ Configuration
 All parameters are stored in a YAML configuration file.  ``denoise prepare``
 writes a complete config (with both 2.5D and 3D fields) from an HDF5 file
 path; alternatively, copy ``baseline_config.yaml`` from the repository root
-and edit it for your dataset::
+and edit it for the dataset::
 
     dataset:
       directory_to_reconstructions: /path/to/reconstructions
@@ -108,13 +108,13 @@ and edit it for your dataset::
 The fields ``mean4norm`` and ``std4norm`` under ``dataset`` are written automatically
 by the training script from the first sub-reconstruction statistics and must be
 present before running inference.  The ``mode`` field under ``train`` is also
-written automatically the first time you run ``denoise train`` and is read by
-``slice``/``volume`` so you do not need to repeat ``--mode`` at inference time.
+written automatically on the first ``denoise train`` run and is read by
+``slice``/``volume`` so inference reads the mode from the config.
 
 Update
 ======
 
-To update your locally installed version, pull the latest code and reinstall.
+To update the local installation, pull the latest code and reinstall.
 
 On a machine **with internet access** (e.g. tocai)::
 
@@ -130,7 +130,7 @@ so pip reuses the already-installed build tools instead of trying to download th
     (denoise) $ pip install --no-build-isolation .
 
 If the conda environment is on a shared filesystem (e.g. NFS/GPFS), installing
-on the internet-facing machine is sufficient — the update is immediately visible
+on the internet-facing machine is sufficient; the update is immediately visible
 on all other machines sharing the same environment.
 
 Dependencies
@@ -153,4 +153,4 @@ The full dependency list is in ``envs/requirements.txt``. Key packages::
    dependency of ``albumentations``.  This is harmless because the
    ``numpy<2.0`` pin ensures numpy 1.x is installed, which is compatible
    with both torch and opencv.  Do **not** install ``opencv-python``
-   (the GUI variant) — it conflicts with the headless version.
+   (the GUI variant); it conflicts with the headless version.

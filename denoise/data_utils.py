@@ -12,45 +12,13 @@ def extract_sliding_window_patches_25d(
     pad_value: float = 0.0,
     return_coords: bool = True,
 ) -> Tuple[torch.Tensor, Optional[List[Tuple[int, int]]], Dict[str, int]]:
-    """
-    Extract sliding-window patches from a 2.5D CT input tensor.
+    """Extract aligned patches from an [N, C, H, W] slice stack.
 
-    Input shape:
-        x: [N, C, H, W]
-          - N: number of samples/windows (e.g., number of center slices you are inferring)
-          - C: "channels" = number of adjacent slices in your 2.5D stack
-          - H, W: spatial size of each slice
-
-    IMPORTANT (alignment guarantee):
-        Patches are extracted with the SAME (top,left) coordinates across ALL channels C.
-        So neighbors remain perfectly aligned within each [C, h, w] patch.
-
-    Args:
-        x: Tensor [N, C, H, W]
-        patch_size: (ph, pw)
-        overlap: fraction in [0, 1). overlap=0.5 => stride = 0.5 * patch_size.
-                 You may also pass overlap=0.0 for non-overlapping.
-        pad_mode: padding mode for edges. Options include:
-                  "reflect", "replicate", "constant".
-        pad_value: used only if pad_mode="constant".
-        return_coords: if True, return list of (top,left) coords for each patch.
-
-    Returns:
-        patches: Tensor [N, P, C, ph, pw]
-            where P is number of spatial patches per image.
-
-        coords: List[(top,left)] of length P (shared across N). None if return_coords=False.
-
-        meta: dict with useful info:
-
-            - H_in, W_in: original spatial size
-            - H_pad, W_pad: padded spatial size
-            - ph, pw: patch size
-            - stride_h, stride_w
-            - n_rows, n_cols
-            - P: number of patches per image
-            - pad_top, pad_left (always 0 here; we pad bottom/right for simplicity)
-            - pad_bottom, pad_right
+    Returns patches [N, P, C, ph, pw], shared (top, left) coordinates and
+    tiling metadata. Coordinates are None when return_coords=False.
+    All channels use the same crop to preserve neighboring-slice alignment.
+    overlap is in [0, 1); padding is applied only at the bottom and right.
+    The metadata records original/padded sizes, strides, grid size and padding.
     """
     if x.dim() != 4:
         raise ValueError(f"Expected x with shape [N,C,H,W], got {tuple(x.shape)}")
@@ -63,13 +31,10 @@ def extract_sliding_window_patches_25d(
     if ph <= 0 or pw <= 0:
         raise ValueError("patch_size must be positive.")
 
-    # Stride derived from overlap
     stride_h = max(1, int(round(ph * (1.0 - overlap))))
     stride_w = max(1, int(round(pw * (1.0 - overlap))))
 
-    # Ensure we cover the full image with a last patch that reaches the boundary.
-    # We'll compute the grid of top/left coordinates on the *padded* tensor.
-    # To avoid negative behavior, we pad bottom/right so that (last_top + ph == H_pad) and similarly for W.
+    # Include the final boundary patch when the stride does not divide the image size.
     def _compute_positions(length: int, patch: int, stride: int) -> List[int]:
         if length <= patch:
             return [0]
@@ -78,21 +43,17 @@ def extract_sliding_window_patches_25d(
             positions.append(length - patch)
         return positions
 
-    # First compute positions on original size; then pad if needed so that patch fits.
     top_positions = _compute_positions(H, ph, stride_h)
     left_positions = _compute_positions(W, pw, stride_w)
 
-    # If H < ph or W < pw, we must pad to at least patch size.
     H_needed = max(H, ph)
     W_needed = max(W, pw)
 
-    # If positions were computed with H < ph, we already have [0]; still need pad to ph.
     pad_bottom = H_needed - H
     pad_right = W_needed - W
     pad_top = 0
     pad_left = 0
 
-    # Apply padding bottom/right only (keeps coordinates simple)
     if pad_bottom > 0 or pad_right > 0:
         if pad_mode == "constant":
             x_pad = F.pad(x, (0, pad_right, 0, pad_bottom), mode=pad_mode, value=pad_value)
@@ -103,14 +64,12 @@ def extract_sliding_window_patches_25d(
 
     _, _, H_pad, W_pad = x_pad.shape
 
-    # Recompute positions on padded shape to guarantee coverage
     top_positions = _compute_positions(H_pad, ph, stride_h)
     left_positions = _compute_positions(W_pad, pw, stride_w)
 
     coords: List[Tuple[int, int]] = []
     patches_list: List[torch.Tensor] = []
 
-    # Extract patches aligned across channels (slice neighbors)
     for top in top_positions:
         for left in left_positions:
             # [N, C, ph, pw]
@@ -149,11 +108,7 @@ def _make_blend_window(
     device: Optional[torch.device] = None,
     dtype: Optional[torch.dtype] = None,
 ) -> torch.Tensor:
-    """
-    Create a 2D blending window of shape [1, 1, ph, pw] for overlap-add stitching.
-    - "uniform": all ones
-    - "hann"/"cosine": raised-cosine (Hann) in both dims, outer product -> 2D
-    """
+    """Return a [1, 1, ph, pw] uniform or separable Hann blending window."""
     if window == "uniform":
         w2d = torch.ones((ph, pw), device=device, dtype=dtype)
     elif window in ("hann", "cosine"):
@@ -175,45 +130,13 @@ def stitch_sliding_window_patches_core(
     window: Literal["uniform", "hann", "cosine"] = "hann",
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """
-    Stitch model outputs from sliding-window patches back into a full image using overlap-add.
+    """Blend patch outputs into [N, K, H_out, W_out].
 
-    Typical workflow:
-      patches, coords, meta = extract_sliding_window_patches_25d(...)
-      logits_patches = model(patches_reshaped)  # then reshape back to [N,P,K,ph,pw]
-      full_logits = stitch_sliding_window_patches(logits_patches, coords, meta)
-
-    Args:
-        patch_outputs:
-            Either:
-              - [N, P, K, ph, pw]  (recommended)
-              - [N*P, K, ph, pw]   (will be reshaped using P from meta)
-            where:
-              N = number of 2.5D stacks / samples
-              P = number of patches per sample
-              K = channels (e.g., logits for num_classes)
-              (ph, pw) = patch spatial size
-
-        coords:
-            List of (top, left) coordinates of length P, matching the extraction order.
-
-        meta:
-            Dict returned by extract_sliding_window_patches_2p5d, containing:
-              H_in, W_in, H_pad, W_pad, ph, pw, P, pad_bottom, pad_right, etc.
-
-        output_size:
-            If provided, crop final result to (H, W). If None, uses (H_in, W_in).
-
-        window:
-            Blending window for overlap regions:
-              - "uniform": simple average
-              - "hann"/"cosine": smooth blending (recommended)
-
-        eps:
-            Small constant to avoid divide-by-zero.
-
-    Returns:
-        full: [N, K, H_out, W_out] stitched output (cropped to original size by default).
+    Accepts [N, P, K, ph, pw] or flattened [N*P, K, ph, pw] predictions
+    in extraction order. coords and meta come from
+    extract_sliding_window_patches_25d. The output is cropped to the original
+    image size unless output_size is supplied. window selects uniform or
+    Hann/cosine weights; eps bounds the normalization denominator.
     """
     if patch_outputs.dim() == 4:
         # [N*P, K, ph, pw] -> [N, P, K, ph, pw]
@@ -237,7 +160,6 @@ def stitch_sliding_window_patches_core(
     H_pad = int(meta["H_pad"])
     W_pad = int(meta["W_pad"])
 
-    # Accumulators
     device = patch_outputs.device
     dtype = patch_outputs.dtype
     acc = torch.zeros((N, K, H_pad, W_pad), device=device, dtype=dtype)
@@ -245,7 +167,6 @@ def stitch_sliding_window_patches_core(
 
     wpatch = _make_blend_window(ph, pw, window=window, device=device, dtype=dtype)  # [1,1,ph,pw]
 
-    # Overlap-add accumulation
     # patch_outputs: [N, P, K, ph, pw]
     for p, (top, left) in enumerate(coords):
         patch = patch_outputs[:, p, :, :, :]          # [N, K, ph, pw]
@@ -254,7 +175,6 @@ def stitch_sliding_window_patches_core(
 
     full = acc / wacc.clamp_min(eps)  # Preserve intensities even at image boundaries.
 
-    # Crop padding back to original size (or a user-specified output_size)
     if output_size is None:
         H_out, W_out = int(meta["H_in"]), int(meta["W_in"])
     else:
@@ -273,43 +193,7 @@ def stitch_sliding_window_patches(
     window: Literal["uniform", "hann", "cosine"] = "hann",
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """
-    Stitch regression outputs from sliding-window patches back into a full image using overlap-add.
-
-    This is identical in spirit to the segmentation/logits stitcher, but intended for
-    regression targets (e.g., predicting the middle slice in a 2.5D setup).
-
-    Args:
-        patch_outputs:
-            Either:
-              - [N, P, K, ph, pw]  (recommended; K typically = 1 for regression)
-              - [N*P, K, ph, pw]   (will be reshaped using P from meta)
-
-            Note: K may be 1, but we keep it general.
-
-        coords:
-            List of (top, left) coordinates of length P, matching the extraction order.
-
-        meta:
-            Dict returned by extract_sliding_window_patches_2p5d, containing:
-              H_in, W_in, H_pad, W_pad, ph, pw, P, pad_bottom, pad_right, etc.
-
-        output_size:
-            If provided, crop final result to (H, W). If None, uses (H_in, W_in).
-
-        window:
-            Blending window for overlap regions:
-              - "uniform": simple average
-              - "hann"/"cosine": smooth blending (recommended)
-
-        eps:
-            Small constant to avoid divide-by-zero.
-
-    Returns:
-        full: [N, K, H_out, W_out] stitched regression output (cropped to original size by default).
-              For your middle-slice regression use-case, K=1 so output is [N, 1, H, W].
-    """
-    # Reuse the exact same stitcher as segmentation: it's channel-agnostic.
+    """Blend center-slice predictions using stitch_sliding_window_patches_core."""
     return stitch_sliding_window_patches_core(
         patch_outputs=patch_outputs,
         coords=coords,
@@ -321,17 +205,11 @@ def stitch_sliding_window_patches(
 
 
 class InferenceBatchSizeOptimizer:
-    """
-    Class for determining the optimal batch size to be used for inferencing
-        -Differences in GPU memory (32GB V100 vs. 80GB A100), model size, and reconstructed image size can all influence
-        how many images can be processed during inference. While we could process 1 image per batch, this is slow and wasteful.
-        -This class helps determine the optimal size to be used
-    params
-        -model (obj) pytorch model to be used for inference
-        -input_shape (tuple) size of the images to be denoised
-        -device (obj) cuda device
-        -max_batch_size (int) maximum batch size to check
-        -precision (str) whether to use flaoting point 32 or amp
+    """Find the largest inference batch that fits on the selected GPU.
+
+    Profiles forward passes up to max_batch_size using the configured
+    channel count, patch dimensions and precision. CPU inference uses batch 1.
+    The result measures memory capacity, not throughput.
     """
     def __init__(self, model: nn.Module, input_shape: tuple, device: torch.device = torch.device('cuda'),
                  max_batch_size: int = 512, precision: str = 'fp32', n_channels: int = 5):

@@ -13,18 +13,10 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union, Literal
 
 def save_normalization_value(config_file, mean, std):
-        """
-        This functin saves the mean and standard deviation back to the yaml file which is then used during inferencing
-
-        params:
-            - config_file (str) location of the config file
-            - mean (float) mean used for normalization
-            - std (float) standard deviation used for normalization
-        """
-        # safe load
+        """Save dataset mean and standard deviation in the YAML for inference."""
         try:
             with open(config_file, 'r') as file:
-                data = yaml.safe_load(file) # Use safe_load for security
+                data = yaml.safe_load(file)
         except FileNotFoundError:
             data = {} # If the file doesn't exist, start with an empty dictionary
         except yaml.YAMLError as exc:
@@ -34,54 +26,41 @@ def save_normalization_value(config_file, mean, std):
         data['dataset']['mean4norm'] = float(mean)
         data['dataset']['std4norm'] = float(std)
 
-        #write the data back to the yaml file
         with open(config_file, 'w') as file:
             yaml.safe_dump(data, file, default_flow_style=False, sort_keys=False)
 
 class TomoDatasetTrain(Dataset):
-    """
-    Training class for 2.5D N2I.
+    """Paired 2.5D training patches from normalized TIFF stacks.
 
-    This class loads in two lists corresponding to the two sub reconstructions
-    (saved as .tiffs) and normalizes them.
-
-    params:
-        - params (obj) yaml object, essentially a dictionary
-        - config_file (str) location of the configuration file
+    Each process loads both splits into CPU memory. params contains the scan
+    YAML settings; config_file receives the normalization statistics.
     """
     def __init__(self, params, config_file):
         super(TomoDatasetTrain, self).__init__()
         dataset_params = params['dataset']
         train_params = params['train']
 
-        # input image patch size
         self.psz = train_params['psz']
 
-        # number of adjacent slices to use
         self.n_slices = train_params['n_slices']
         z_stride = train_params.get('z_stride', 1)
 
-        # specify augmentations for training
         self.augmentations = A.Compose([
                 A.SquareSymmetry(p=1.0),
         ],
         additional_targets={'split1': 'image'}
         )
 
-        # load in tiff images for training
 
-        # location to sub reconstructions
         recon_0_path =  dataset_params['directory_to_reconstructions'] + '/' + dataset_params['sub_recon_name0']
         recon_1_path =  dataset_params['directory_to_reconstructions'] + '/' + dataset_params['sub_recon_name1']
 
-        # collect tiff files and load in images
         tiffs_collection = tiffs.glob(recon_0_path)[::z_stride]
         self.split0, split0_mean, split0_std = tiffs.load_stack(tiffs_collection)
 
         tiffs_collection = tiffs.glob(recon_1_path)[::z_stride]
         self.split1, split1_mean, split1_std = tiffs.load_stack(tiffs_collection)
 
-        # normalize the data
         self.split0 -= split0_mean
         self.split0 /= split0_std
         log.info(f"\nSplit 0 is scaled with calculated mean: {split0_mean}, std: {split0_std}")
@@ -100,7 +79,6 @@ class TomoDatasetTrain(Dataset):
 
         S, H, W = int(self.split0.shape[0]), int(self.split0.shape[1]), int(self.split0.shape[2])
 
-        # compute offsets around the center
         left = self.n_slices // 2
         right = self.n_slices - 1 - left
         offsets = np.arange(-left, right + 1, dtype=int)  # length == num_slices
@@ -116,7 +94,6 @@ class TomoDatasetTrain(Dataset):
         view0 = self.split0[:, rst:rst+self.psz, cst:cst+self.psz][idxs_mapped]
         view1 = self.split1[:, rst:rst+self.psz, cst:cst+self.psz][idxs_mapped]
 
-        # perform augmentations
         augmented = self.augmentations(image=np.moveaxis(view0, 0, -1), split1=np.moveaxis(view1, 0, -1))
         view0 = np.moveaxis(augmented['image'], -1, 0)
         view1 = np.moveaxis(augmented['split1'], -1, 0)
@@ -145,10 +122,7 @@ def _pad_hw_numpy(
     mode: Literal["reflect", "edge", "constant"] = "reflect",
     constant_values: float = 0.0,
 ) -> np.ndarray:
-    """
-    Pad a 2D or 3D array on H/W (last two dims) using numpy.pad.
-    - arr can be [H,W] or [C,H,W]
-    """
+    """Pad the last two dimensions of an [H, W] or [C, H, W] array."""
     if pad_bottom == 0 and pad_right == 0:
         return arr
 
@@ -171,14 +145,10 @@ def _build_2p5d_stack(
     edge_mode: Literal["reflect", "edge", "constant"] = "reflect",
     constant_values: float = 0.0,
 ) -> np.ndarray:
-    """
-    Build a 2.5D stack centered at slice d_idx:
-      returns stack shape [C, H, W], where C = 2*neighbors + 1.
+    """Build a [2*neighbors+1, H, W] stack centered on d_idx.
 
-    Edge handling:
-      - "reflect": reflect indices at boundaries
-      - "edge": clamp to [0, D-1]
-      - "constant": out-of-bounds slices filled with constant_values
+    Out-of-range indices are reflected, clamped or filled with constant_values
+    according to edge_mode.
     """
     assert vol.ndim == 3, f"Expected vol [D,H,W], got {vol.shape}"
     D, H, W = vol.shape
@@ -232,7 +202,7 @@ def _make_blend_window_np(
     elif window in ("hann", "cosine"):
         wh = np.hanning(ph).astype(np.float32)
         ww = np.hanning(pw).astype(np.float32)
-        # avoid exact zeros at the ends (helps if a pixel only lands on borders due to edge cases)
+        # Nonzero border weights keep edge pixels covered during overlap-add.
         wh = np.maximum(wh, eps)
         ww = np.maximum(ww, eps)
         w2d = np.maximum(wh[:, None] * ww[None, :], eps)
@@ -242,11 +212,7 @@ def _make_blend_window_np(
 
 @dataclass(frozen=True)
 class PatchIndex:
-    """
-    One patch address within the volume.
-    d_idx: center slice index for 2.5D stack
-    top,left: spatial location within padded H/W coordinates
-    """
+    """Center-slice index and patch origin in padded spatial coordinates."""
     d_idx: int
     top: int
     left: int
@@ -254,9 +220,7 @@ class PatchIndex:
 
 @dataclass
 class TilingMeta:
-    """
-    Metadata needed for stitching (later) and sanity checks.
-    """
+    """Volume dimensions, patch grid and padding required for stitching."""
     D: int
     H_in: int
     W_in: int
@@ -277,15 +241,10 @@ class TilingMeta:
 
 
 class TomoDatasetInfer(Dataset):
-    """
-    Dataset that yields overlapping patches from a CT volume (NumPy) with 2.5D channels.
+    """Overlapping 2.5D patches from a normalized TIFF volume.
 
-    Input volume: vol [D, H, W] (NumPy array)
-
-    Each item returns:
-
-    - x_patch: torch.FloatTensor [C, ph, pw]
-    - info: dict with patch coordinates and indices (for stitching later)
+    Each item contains [C, ph, pw] pixels and, when requested, coordinates
+    for stitching. The full input volume is held in CPU memory.
     """
     def __init__(
         self,
@@ -300,24 +259,12 @@ class TomoDatasetInfer(Dataset):
         edge_constant: float = 0.0,
         return_info: bool = True,
     ):
-        """
-        params:
+        """Load the requested TIFF range and build its patch grid.
 
-            params (obj) yaml object, essentially a dictionary
-            start_slice: start slice of volume
-            end_slice: end slice of volume
-            slice_range: (d_start, d_end) inclusive/exclusive, like Python slicing.
-                         If None, uses full [0, D).
-            preprocess: optional function applied to vol once at init (e.g., windowing/scaling).
-                        Signature: vol_np -> vol_np (still [D,H,W]).
-            output_dtype: dtype for patches (np.float32 recommended).
-            pad_mode: padding for H/W when patch doesn't fit exactly:
-                      "reflect", "edge" (replicate), or "constant".
-            pad_constant: used if pad_mode="constant".
-            edge_mode: how to handle 2.5D neighbors near D boundaries:
-                       "reflect", "edge", or "constant".
-            edge_constant: used if edge_mode="constant".
-            return_info: if True, returns dict with (d_idx, top, left) and meta.
+        start_slice/end_slice select TIFFs; slice_range selects a half-open depth
+        interval within the loaded volume. pad_mode controls spatial padding;
+        edge_mode controls axial neighbors. return_info includes patch coordinates
+        and tiling metadata.
         """
         super().__init__()
 
@@ -329,13 +276,11 @@ class TomoDatasetInfer(Dataset):
         mean4norm = params['dataset']['mean4norm']
         std4norm = params['dataset']['std4norm']
 
-        # process slice if specified
         if len(start_slice) == 0:
             tiffs_collection = tiffs.glob(recon_dir)
         else:
             tiffs_collection = tiffs.glob(recon_dir)[int(start_slice):int(end_slice)]
 
-        #print(tiffs_collection)
         self.vol, _, _ = tiffs.load_stack(tiffs_collection)
 
         self.vol -= mean4norm
@@ -355,7 +300,6 @@ class TomoDatasetInfer(Dataset):
         D, H, W = self.vol.shape
         self.D, self.H_in, self.W_in = D, H, W
 
-        # Slice range
         if slice_range is None:
             d_start, d_end = 0, D
         else:
@@ -366,7 +310,6 @@ class TomoDatasetInfer(Dataset):
                 raise ValueError("slice_range must satisfy d_end > d_start")
         self.d_start, self.d_end = d_start, d_end
 
-        # Strides
         self.stride_h = max(1, int(round(self.ph * (1.0 - self.overlap))))
         self.stride_w = max(1, int(round(self.pw * (1.0 - self.overlap))))
 
@@ -376,8 +319,6 @@ class TomoDatasetInfer(Dataset):
         self.pad_bottom = H_needed - H
         self.pad_right = W_needed - W
 
-        # Create padded view of each 2D slice on-the-fly (we’ll pad the stack per item),
-        # but we also compute positions on the padded shape:
         H_pad = H + self.pad_bottom
         W_pad = W + self.pad_right
         self.H_pad, self.W_pad = H_pad, W_pad
@@ -400,7 +341,6 @@ class TomoDatasetInfer(Dataset):
         self.edge_mode = edge_mode
         self.edge_constant = float(edge_constant)
 
-        # Build a flat index of all patches across requested slices
         self.index: List[PatchIndex] = []
         for d_idx in range(self.d_start, self.d_end):
             for top in self.top_positions:
@@ -437,41 +377,13 @@ class TomoDatasetInfer(Dataset):
         keep_k_dim: bool = True,
         eps: float = 1e-6,
     ) -> np.ndarray:
-        """
-        Stitch patch predictions back into a (sub)volume using overlap-add blending.
+        """Blend predictions in self.index order into the selected volume.
 
-        Args:
-            pred_patches:
-                Patch predictions in dataset order (same order as self.index):
-                  - [T, ph, pw]               regression (implicit K=1)
-                  - [T, 1, ph, pw]            regression (explicit K=1)
-                  - [T, K, ph, pw]            segmentation logits/probs
-
-                where T must equal len(self.index) == total_patches.
-
-            window:
-                Blending window: 'uniform' (avg) or 'hann'/'cosine' (recommended).
-
-            output_size:
-                (H, W) to crop final result. If None, uses (H_in, W_in).
-
-            keep_k_dim:
-                If pred_patches was [T, ph, pw], output can be:
-                  - keep_k_dim=True  -> [D_sel, 1, H, W]
-                  - keep_k_dim=False -> [D_sel, H, W]
-
-                If pred_patches already has K dim, output keeps it.
-
-            eps:
-                Small constant to avoid divide-by-zero in normalization.
-
-        Returns:
-            out:
-              - [D_sel, K, H, W] (typical)
-              - or [D_sel, H, W] if K==1 and keep_k_dim=False
-
-            where D_sel = (d_end - d_start), i.e., only the slices this dataset processed.
-            These correspond to the *center slice predictions* in your 2.5D setup.
+        Accepts [T, ph, pw], [T, 1, ph, pw] or [T, K, ph, pw], where T is the
+        dataset length. window selects uniform or Hann/cosine weights. output_size
+        defaults to the original spatial dimensions. Returns [D_sel, K, H, W],
+        or [D_sel, H, W] for implicit single-channel input with keep_k_dim=False.
+        eps bounds the weight denominator.
         """
         T_expected = len(self.index)
         if pred_patches.shape[0] != T_expected:
@@ -500,7 +412,6 @@ class TomoDatasetInfer(Dataset):
                 f"Patch spatial size mismatch: pred has {pred.shape[-2:]}, expected {(ph, pw)}"
             )
 
-        # Determine output cropping
         if output_size is None:
             H_out, W_out = self.H_in, self.W_in
         else:
@@ -508,13 +419,11 @@ class TomoDatasetInfer(Dataset):
 
         D_sel = self.d_end - self.d_start
 
-        # Accumulators (float32 is usually fine; float64 if you want ultra-safe accumulation)
         acc = np.zeros((D_sel, K, H_pad, W_pad), dtype=np.float32)
         wacc = np.zeros((D_sel, 1, H_pad, W_pad), dtype=np.float32)
 
         w2d = _make_blend_window_np(ph, pw, window=window, eps=eps)  # [ph, pw]
 
-        # Stitch in the same order as self.index
         for t, pi in enumerate(self.index):
             d_local = pi.d_idx - self.d_start  # map global slice idx -> [0..D_sel-1]
             top, left = pi.top, pi.left
@@ -526,7 +435,6 @@ class TomoDatasetInfer(Dataset):
         out = acc / np.maximum(wacc, eps)  # Preserve intensities at Hann window boundaries.
         out = out[:, :, :H_out, :W_out].copy()
 
-        # Optionally squeeze K dim for regression convenience
         if K == 1 and (pred_patches.ndim == 3) and not keep_k_dim:
             out = out[:, 0]  # [D_sel, H, W]
 
@@ -542,7 +450,7 @@ class TomoDatasetInfer(Dataset):
         top, left = pi.top, pi.left
 
         # Build patch [C, ph, pw] by indexing directly into the pre-padded volume.
-        # This avoids copying full slices (~200 MB) just to extract a small patch.
+        # Indexing after the spatial crop avoids copying full detector planes.
         if self.edge_mode == 'constant':
             C = 2 * neighbors + 1
             patch = np.full((C, self.ph, self.pw), self.edge_constant, dtype=self.vol_padded.dtype)

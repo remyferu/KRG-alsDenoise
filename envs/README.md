@@ -1,9 +1,11 @@
 # Environment specifications
 
-Use [the complete NERSC guide](../docs/SETUP_NERSC.md). It distinguishes the
-Python 3.8 ALS reconstruction/kernel environment from the Python 3.11 n2i backend.
+The [NERSC setup guide](../docs/SETUP_NERSC.md) specifies separate Python 3.8
+ALS and Python 3.11 denoising environments.
 
-`n2i_environment.yml` creates a portable starting environment without machine paths:
+`n2i_environment.yml` supplies a base environment without machine-specific paths.
+Run from the repository root, then install a site-compatible CUDA-enabled
+PyTorch build and the backend:
 
 ```bash
 module load conda
@@ -14,15 +16,14 @@ python -m pip install -e .
 python -m pip check
 ```
 
-The ALS environment comes from the pinned `als-computing/microct/environment.yml`
-in the setup guide. Install this repository's `workflow/` distribution into that
-working environment with `--no-deps`; it does not install Torch.
+The ALS environment uses the pinned `als-computing/microct/environment.yml`
+specified in the setup guide. Install `workflow/` there with `--no-deps`.
 
-These are installation specifications, not fresh NERSC solver-tested lock files.
-Keep working environments and site-compatible CUDA builds. To record a successful
-installation for your site, save `conda list --explicit` and `python -m pip freeze`
-alongside your durable run provenance. Do not commit user paths or credentials.
+These specifications are not solver-verified NERSC lock files. Retain working
+environments and record successful installations with `conda list --explicit`
+and `python -m pip freeze`. Store those records with run provenance; exclude
+credentials and machine-specific paths from repository commits.
 
-`legacy/denoise_environment.yml` is the original upstream machine-specific export.
-`requirements.txt` describes backend/runtime tools; documentation tools are available
-through the backend's `docs` extra and are not needed for scan processing.
+`legacy/denoise_environment.yml` is the upstream machine-specific export.
+Root `requirements.txt` lists backend dependencies. Documentation tools are
+available through the backend's `docs` extra.

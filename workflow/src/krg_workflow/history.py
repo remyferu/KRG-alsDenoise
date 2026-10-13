@@ -1,7 +1,4 @@
-"""History helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Training-log parsing and loss-history plots and exports."""
 from pathlib import Path
 import csv
 import matplotlib.pyplot as plt

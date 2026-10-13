@@ -46,7 +46,6 @@ class LCL(nn.Module):
 
 
 def laplacian_entropy_map(lap, bins = 256):
-    # Compute entropy for each image in batch
     B = lap.shape[0]
     entropies = []
     for i in range(B):

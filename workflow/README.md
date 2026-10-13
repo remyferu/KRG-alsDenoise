@@ -1,14 +1,17 @@
 # KRG CT workflow helpers
 
-Install this lightweight Python 3.8-compatible package into the working ALS
-environment, separate from the PyTorch denoising backend:
+Python 3.8 package for ALS scan inspection, centering, reconstruction queues,
+notebook displays and training-history plots. PyTorch runs in the separate
+denoising environment and is not a dependency of this package.
+
+Install from the repository root in an ALS environment with its scientific
+dependencies already installed:
 
 ```bash
 python -m pip install --no-deps -e workflow
 krg-workflow doctor
 ```
 
-See [first-time setup](../docs/SETUP_NERSC.md) and the
-[workflow module/API guide](../docs/WORKFLOW.md). The package contains no model
-training on import and no Torch dependency. Its CLI can inspect queues, plot
-existing history and explicitly execute frozen reconstruction queues.
+The CLI provides environment diagnostics, history plotting, queue inspection
+and reconstruction queue execution. See [NERSC setup](../docs/SETUP_NERSC.md)
+and the [workflow guide](../docs/WORKFLOW.md).

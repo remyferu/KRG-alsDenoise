@@ -1,7 +1,4 @@
-"""Files helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Atomic file writes, operation locks and path containment."""
 from datetime import datetime, timezone
 from pathlib import Path
 import contextlib
@@ -23,7 +20,7 @@ def utc_now():
 
 
 def json_write(path, value):
-    """Unique temporary files and atomic replacement, never a shared .tmp name."""
+    """Write JSON atomically through a unique temporary file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name('.' + path.name + '.' + uuid.uuid4().hex + '.tmp')
@@ -39,7 +36,7 @@ def json_write(path, value):
 
 @contextlib.contextmanager
 def exclusive_lock(path):
-    """Never steal locks. Interrupts release the lock owned by this context."""
+    """Acquire an operation lock and release only the token owned by this context."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     token = dict(token=uuid.uuid4().hex, pid=os.getpid(), host=socket.gethostname(), job=os.environ.get('SLURM_JOB_ID'), created_utc=utc_now())

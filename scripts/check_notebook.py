@@ -1,7 +1,4 @@
-"""Check the maintained v3.4 notebook, or refresh its embedded setup guide.
-
-Run from any directory. This never executes notebook code or training.
-"""
+"""Check notebook syntax and release metadata, or refresh the embedded setup guide."""
 import argparse
 import ast
 import json

@@ -1,31 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-denoise: Noise2Inverse CT denoising library.
-
-Command-line interface for training the Noise2Inverse model and denoising
-CT reconstructions using the trained model.
-
-Usage
------
-Train the model::
-
-    (denoise) $ denoise train --config /data/sample_rec_config.yaml --gpus 0,1
-
-Denoise a single CT slice::
-
-    (denoise) $ denoise slice --config /data/sample_rec_config.yaml --slice-number 500
-
-Denoise the full CT volume::
-
-    (denoise) $ denoise volume --config /data/sample_rec_config.yaml
-
-Denoise a sub-volume (slices 200 to 400)::
-
-    (denoise) $ denoise volume --config /data/sample_rec_config.yaml \\
-                --start-slice 200 --end-slice 400
-"""
+"""Command-line interface for CT configuration, training, inference and model registration."""
 
 import os
 import sys
@@ -180,25 +156,14 @@ def _print_registry_matches(matches):
 
 
 def train(args):
-    """
-    Train the Noise2Inverse model using distributed data parallel (DDP).
+    """Launch distributed training from the CLI arguments.
 
-    When called directly (``denoise train``), this function automatically
-    re-launches itself via ``torchrun`` with ``PYTHONNOUSERSITE=1``, so no
-    manual ``torchrun`` invocation is required.
-
-    Parameters
-    ----------
-    args.config : str
-        Path to the YAML configuration file.
-    args.gpus : str
-        Comma-separated list of GPU IDs (e.g. ``0,1``).
-    args.no_search : bool
-        Skip registry search before training.
+    Outside a distributed worker, search the registry unless args.no_search
+    is set, then relaunch through torchrun with PYTHONNOUSERSITE=1.
+    args.config selects the YAML and args.gpus selects visible GPU identifiers.
     """
     if 'LOCAL_RANK' not in os.environ:
-        # Not inside a torchrun context yet — optionally search registry,
-        # then re-launch via torchrun.
+        # Registry selection occurs before launching distributed workers.
         if not getattr(args, 'no_search', False):
             from denoise import registry as reg
             matches = reg.search(args.config)
@@ -257,7 +222,6 @@ def train(args):
         result = subprocess.run(cmd, env=env)
         sys.exit(result.returncode)
 
-    # Inside torchrun context — proceed with training.
     if len(args.gpus) > 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
     os.environ.setdefault('OMP_NUM_THREADS', '1')
@@ -313,18 +277,7 @@ def search_registry(args):
 
 
 def denoise_slice(args):
-    """
-    Denoise a single CT slice using the trained Noise2Inverse model.
-
-    Parameters
-    ----------
-    args.config : str
-        Path to the YAML configuration file.
-    args.slice_number : int
-        Index of the slice to denoise.
-    args.gpus : str
-        Comma-separated list of GPU IDs (e.g. ``0``).
-    """
+    """Run 2.5D inference for args.slice_number using args.config and args.gpus."""
     if len(args.gpus) > 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
     logging.getLogger('matplotlib.font_manager').disabled = True
@@ -336,20 +289,7 @@ def denoise_slice(args):
 
 
 def denoise_volume(args):
-    """
-    Denoise the entire CT volume (or a sub-volume) using the trained model.
-
-    Parameters
-    ----------
-    args.config : str
-        Path to the YAML configuration file.
-    args.start_slice : str
-        First slice index to process (empty string for the first slice).
-    args.end_slice : str
-        Last slice index to process (None for the last slice).
-    args.gpus : str
-        Comma-separated list of GPU IDs (e.g. ``0``).
-    """
+    """Run volume inference over the requested slice range using args.config and args.gpus."""
     if len(args.gpus) > 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
     logging.getLogger('matplotlib.font_manager').disabled = True
@@ -372,7 +312,6 @@ def main():
     home = os.path.expanduser("~")
     logs_home = os.environ.get('DENOISE_LOG_DIR', os.path.join(home, 'logs'))
 
-    # make sure logs directory exists
     if not os.path.exists(logs_home):
         os.makedirs(logs_home)
 

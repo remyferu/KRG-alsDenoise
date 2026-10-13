@@ -1,7 +1,4 @@
-"""Plans helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Schema-4 reconstruction plans and immutable run identity."""
 from pathlib import Path
 import copy
 import json

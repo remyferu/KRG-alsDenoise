@@ -1,7 +1,4 @@
-"""Queue helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Reconstruction queue execution, preflight checks and repair previews."""
 from pathlib import Path
 import copy
 import hashlib
@@ -31,7 +28,7 @@ def load_queue(path):
 
 
 def inspect_queue(queue, expected_backend=None, expected_settings=None):
-    """Cheap preflight: plan/backend checks; raw scans are opened only during execution."""
+    """Check plans and backend identity; defer raw-scan reads until execution."""
     results, ids, paths, roots = ([], set(), set(), {})
     for number, entry in enumerate(queue['entries']):
         outcome = dict(index=number, id=entry.get('id') if isinstance(entry, dict) else None, plan_path=entry.get('plan_path') if isinstance(entry, dict) else None, status='ready', reason='')

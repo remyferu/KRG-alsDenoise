@@ -1,20 +1,21 @@
-# data_importers
+# Denoising backend
 
-Scripts that convert external data formats into the per-slice directory structure
-expected by Noise2Inverse360.
+PyTorch training and inference for paired CT reconstructions. The CLI entry
+point is `denoise`; `python -m denoise` exposes the same commands.
 
-Noise2Inverse360 expects each sub-reconstruction to be a **directory of individual
-2D TIFF slices** named `00000.tiff`, `00001.tiff`, … so that `tiffs.glob()` can
-sort and load them in order.
+| Command | Purpose |
+|---|---|
+| `prepare` | Write a scan configuration and print upstream reconstruction commands |
+| `train` | Train or resume a 2.5D or 3D model |
+| `slice` | Denoise one slice with a 2.5D model |
+| `volume` | Denoise a volume with a 2.5D or 3D model |
+| `register`, `search` | Store checkpoints and search the local model registry |
 
-## Converters
+Training requires full/even/odd reconstruction directories with matching slice
+names, dimensions and geometry. NAFNet is selected with
+`train.architecture: nafnet25d`; baseline U-Nets use `unet` or `unet3d`.
 
-| Script | Input | Use case |
-|--------|-------|----------|
-| `3dtiff_converter.py` | 3D TIFF stack (single file, shape `[Z, H, W]`) | Reconstructions already saved as a single volumetric TIFF |
-
-## Adding a new converter
-
-1. Place the script here with a descriptive name (e.g. `hdf5_converter.py`).
-2. Output per-slice TIFFs named `%05d.tiff` into a subdirectory alongside the source data.
-3. Add a row to the table above.
+See [NERSC setup](../docs/SETUP_NERSC.md),
+[model configuration and usage](../docs/NAFNET_CT.md), and
+[the workflow module map](../docs/WORKFLOW.md). The ALS notebook helpers are a
+separate package under `workflow/`.

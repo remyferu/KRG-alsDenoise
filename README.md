@@ -1,56 +1,63 @@
 # KRG-alsDenoise
-Tools to run on NERSC for denoising ALS 8.3.2 micro-ct reconstructions
 
-This repository extends [Noise2Inverse360](https://github.com/tomography/Noise2Inverse360)
-with an optional **NAFNet-based 2.5D CT model**, selected with
-`train.architecture: nafnet25d` in the scan YAML. The original 2.5D and 3D U-Nets
-remain available. NAFNet requires a fresh training run; existing U-Net weights are
-incompatible.
+ALS 8.3.2 micro-CT reconstruction and self-supervised denoising on NERSC.
+The repository extends [Noise2Inverse360](https://github.com/tomography/Noise2Inverse360)
+with a NAFNet-based 2.5D model and an ALS reconstruction workflow.
 
-Training retains the paired L1/LCL objective and also logs **L2/MSE** and
-**SSIM loss (1 - SSIM)** for reference. The new metrics are saved in CSV and resume
-history and shown by the v3.4 history plots; checkpoint criteria are unchanged.
+The [v3.4 notebook](notebooks/Noise2Inverse360_HPC_v3.4.ipynb) reconstructs
+full, even-angle and odd-angle TIFF stacks, estimates the center of rotation
+with TomoPy Vo, and manages reconstruction queues, training and inference.
+Reusable notebook code is in `workflow/src/krg_workflow`.
 
-The model uses learned neighboring-slice gates, NAFBlocks, a full-resolution
-detail branch, and a residual prediction of the center slice. It has **989,745
-parameters** at the supplied settings and supports 5, 7, or 9 slices. This is an
-experimental adaptation: preservation of 2Ã¢â‚¬â€œ5 pixel features needs validation on
-your scans.
+## Setup and usage
 
-Start with [First-time NERSC setup](docs/SETUP_NERSC.md), then the
-[denoising usage guide](docs/NAFNET_CT.md), or open the
-[v3.4 HPC notebook](notebooks/Noise2Inverse360_HPC_v3.4.ipynb).
-Reconstructed full/even/odd TIFF stacks from the existing workflow can be reused.
+Follow [NERSC setup](docs/SETUP_NERSC.md) to install the two environments:
+
+- `als832`: notebook kernel, ALS reconstruction and the `workflow/` package.
+- `n2i`: PyTorch denoising backend, installed from the repository root.
+
+The [denoising guide](docs/NAFNET_CT.md) covers model configuration, losses,
+checkpoints and inference. The [workflow guide](docs/WORKFLOW.md) describes
+helper modules and terminal commands.
+
+For an existing n2i environment and reconstructed scan:
 
 ```bash
-# After cloning this repository and activating your existing n2i environment:
 python -m pip install --no-deps -e .
 export MPLBACKEND=Agg
 python examples/configure_nafnet.py --input /path/scan_config.yaml --output /path/scan_nafnet.yaml
-
-# Run yourself when ready, using a new training output directory:
 denoise train --config /path/scan_nafnet.yaml --gpus 0,1,2,3 --no-search --output-dir /path/TrainOutput_NAF
 denoise volume --config /path/scan_nafnet.yaml --model-dir /path/TrainOutput_NAF --checkpoint val
 ```
 
-The example starts with five slices, 256-pixel patches, batch 4 per GPU, and BF16.
-The supplied learning rate and patience are starting values, not tuned optima.
-Each rank still loads both TIFF stacks into host RAM; the smaller network does
-not eliminate that memory requirement.
+These commands require the backend dependencies and an allocated GPU session.
+The notebook keeps training disabled until `RUN_TRAINING=True`.
 
-Code and inference checks (training tests are skipped by default):
+## Models and losses
+
+Select NAFNet with `train.architecture: nafnet25d`. The original 2.5D and 3D
+U-Nets remain available; their checkpoints are incompatible with NAFNet.
+The default NAFNet model has 989,745 parameters, learned axial slice fusion,
+a full-resolution detail branch and a center-slice residual output. Supported
+slice counts are 5, 7 and 9.
+
+Training uses paired L1 and LCL. MSE and SSIM loss are recorded for reference
+without affecting optimization or checkpoint selection. History plots include
+these metrics when present.
+
+Default settings use five slices, 256-pixel patches, batch 4 per GPU and BF16.
+They require evaluation for each dataset. Preservation of 2–5 pixel features
+has not been established. Each GPU rank loads both TIFF stacks into host RAM;
+reducing model size does not reduce those input copies.
+
+## Checks and attribution
+
+Run from the checkout in an environment with backend dependencies:
 
 ```bash
-MPLBACKEND=Agg NO_ALBUMENTATIONS_UPDATE=1 python -m unittest discover -s tests -v
+PYTHONPATH=workflow/src MPLBACKEND=Agg NO_ALBUMENTATIONS_UPDATE=1 python -m unittest discover -s tests -v
 ```
 
-See [source attribution and licenses](NOTICE.md). Original upstream documentation
-is kept in [the legacy upstream guide](docs/legacy/UPSTREAM_NOISE2INVERSE.md).
-
-The v3.4 notebook contains short action cells backed by a separate Python 3.8
-workflow package. Install `workflow/` into your working ALS environment with
-`python -m pip install --no-deps -e workflow`; keep the n2i backend installation
-separate. See the [workflow module map and terminal helpers](docs/WORKFLOW.md).
-
-For checkout tests, also expose the workflow package: `PYTHONPATH=workflow/src`.
-The previous v3.3 notebook is preserved for reference.
+Training tests are disabled by default. Earlier notebooks and
+[upstream documentation](docs/legacy/UPSTREAM_NOISE2INVERSE.md) are retained
+as historical references. See [source attribution and licenses](NOTICE.md).

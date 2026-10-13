@@ -1,7 +1,7 @@
-# Original upstream documentation
+# Historical upstream documentation
 
-This directory preserves the original Noise2Inverse360 usage guide and Sphinx
-documentation. They describe upstream defaults and are historical references.
+The Noise2Inverse360 usage guide and Sphinx documentation describe the upstream
+workflow. Their prose has been edited; they remain historical references.
 
 Current instructions are [NERSC setup](../SETUP_NERSC.md),
 [denoising usage](../NAFNET_CT.md), and [workflow development](../WORKFLOW.md).

@@ -1,7 +1,4 @@
-"""Runtime helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""NERSC allocation checks, thread configuration and subprocess logging."""
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path

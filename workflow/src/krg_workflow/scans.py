@@ -1,7 +1,4 @@
-"""Scans helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""ALS HDF5 metadata, source fingerprints and virtual projection views."""
 from pathlib import Path
 import h5py
 import hashlib

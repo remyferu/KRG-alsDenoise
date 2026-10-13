@@ -5,14 +5,14 @@ About
 `denoise <https://github.com/AISDC/Noise2Inverse360>`_ provides a
 self-supervised deep-learning pipeline for denoising CT reconstructions using the
 `Noise2Inverse <https://arxiv.org/abs/2001.11801>`_ method.  Two convolution
-modes are available: a fast **2.5D** mode (default) and a full **3D** mode for
-coherent X-ray data where structured 3D noise cannot be removed slice-by-slice.
+modes are available: 2.5D (default) and 3D modes with different axial context and memory costs.
 
 Method
 ------
 
-Noise2Inverse leverages the fact that CT sinograms from alternating angular
-subsets (two interleaved half-angle acquisitions) are statistically independent.
+Noise2Inverse trains on reconstructions from alternating angular subsets.
+The method assumes independent noise in the measured data; shared calibration
+and detector errors can violate that assumption.
 A U-Net is trained to predict one subset reconstruction from the other, learning
 to remove noise without any clean reference images.
 
@@ -25,9 +25,8 @@ The self-supervised training objective is:
    \bigr]
 
 where :math:`x_0` and :math:`x_1` are two statistically independent
-sub-reconstructions and :math:`f` is the denoising network.  After a warm-up
-phase, a Laplacian Contrast Loss (LCL) term is added to sharpen fine structures
-without over-smoothing edges.
+sub-reconstructions under the method’s noise assumptions, and :math:`f` is the denoising network.  After a warm-up
+phase, a Laplacian Contrast Loss (LCL) term is added as a contrast regularizer.
 
 Convolution modes
 -----------------
@@ -39,80 +38,38 @@ Convolution modes
    * - Mode
      - Flag
      - Network
-     - Best for
+     - Applications
    * - **2.5D** (default)
      - ``--mode 2.5d``
      - 2D U-Net without skip connections, GroupNorm, LeakyReLU.
        Stacks *N* adjacent axial slices as input channels.
-     - General synchrotron CT; fast, memory-efficient.
+     - Slice prediction with neighboring-slice context.
    * - **3D**
      - ``--mode 3d``
      - Full 3D U-Net with skip connections, layer norm.
        Processes cubic sub-volumes.
-     - Coherent X-ray microscopy (XNH); removes structured 3D noise
-       and ring artifacts.
+     - Volumetric restoration, including coherent X-ray microscopy (XNH).
 
-In a nutshell
-^^^^^^^^^^^^^
+Model context and memory
+^^^^^^^^^^^^^^^^^^^^^^^^
 
-**2.5D** treats the volume as a stack of 2D slices.  For each slice it stacks
-*N* adjacent slices as input channels to a 2D U-Net, giving the network limited
-depth context.  Training is fast and memory-efficient — the full volume is never
-loaded as a 3D array.
+2.5D predicts the center slice from neighboring slices passed as channels to
+a 2D U-Net. The baseline uses GroupNorm and LeakyReLU without skip connections.
+3D processes cubic patches with a volumetric U-Net and skip connections.
+Both training datasets load paired TIFF stacks into CPU memory in each process.
+3D convolutions also increase activation memory and computation per patch.
 
-**3D** processes true cubic sub-volumes through a fully volumetric U-Net,
-learning spatial structure simultaneously in all three directions.  This makes
-it better at removing noise that is correlated across slices (ring artifacts,
-structured 3D noise), but it requires loading the entire volume into CPU RAM
-and is substantially slower to train and infer.
-
-.. admonition:: Key trade-off
-
-   2.5D is fast and memory-efficient but treats depth as a second-class
-   dimension.  3D is spatially isotropic but requires significantly more RAM
-   and compute.
-
-2.5D mode
-^^^^^^^^^
-
-The 2.5D extension stacks a small number of adjacent axial slices (controlled
-by ``n_slices`` in the config, default 5) as input channels to a 2D U-Net.
-This enables the network to exploit inter-slice coherence and suppress ring and
-streak artefacts more effectively than purely slice-by-slice (2D) processing,
-while remaining fast enough for multi-terabyte clinical and synchrotron datasets.
-
-The 2.5D network (``model.py``) uses no skip connections, GroupNorm, and
-LeakyReLU — a configuration shown to be robust across synchrotron beamlines.
-
-3D mode
-^^^^^^^
-
-The 3D mode uses a full volumetric U-Net with skip connections (encoder–decoder
-architecture from Laugros et al., bioRxiv 2025, adapted from the ELEKTRONN3
-implementation).  By convolving in all three spatial dimensions simultaneously,
-it can remove structured 3D noise such as the probe-object mixing artifacts
-present in X-ray holographic nanotomography (XNH) data — noise that is
-correlated across slices and therefore invisible to a 2D or 2.5D network.
-
-Key advantages of 3D mode:
-
-* Removes ring artifacts and streak noise that extend across many slices
-* Exploits full 3D context for denoising — no slice-by-slice approximation
-* Training uses 24-rotation 3D geometric augmentation (all cube symmetries)
-  to make the model invariant to volumetric orientation
-
-Trade-offs:
-
-* Requires significantly more GPU memory (cubic patches, default 96³)
-* Inference is patch-based with 3D overlap-add stitching (slower than 2.5D)
-* The ``slice`` command is not available in 3D mode — use ``volume`` instead
+The 3D architecture and augmentation are adapted from Laugros et al. (2025)
+and the ELEKTRONN3 implementation. Training applies matching cube rotations
+and flips to paired patches. Single-slice inference is available only for 2.5D;
+3D uses the ``volume`` command.
 
 Training
 --------
 
 Training uses PyTorch Distributed Data Parallel (DDP) across one or more GPUs.
 The ``denoise train`` command handles ``torchrun`` and ``PYTHONNOUSERSITE``
-internally — no manual ``torchrun`` invocation is required::
+internally; no manual ``torchrun`` invocation is required::
 
     # 2.5D (default)
     denoise train --config baseline_config.yaml --gpus 0,1
@@ -127,22 +84,22 @@ each 3D prediction patch.
 
 Three model checkpoints are saved automatically:
 
-* ``best_val_model.pth``  — lowest validation L1 loss
-* ``best_lcl_model.pth``  — lowest LCL regularisation loss
-* ``best_edge_model.pth`` — highest Laplacian edge score
+* ``best_val_model.pth``: lowest validation L1 loss
+* ``best_lcl_model.pth``: lowest LCL regularisation loss
+* ``best_edge_model.pth``: highest Laplacian edge score
 
 Inference
 ---------
 
-**2.5D mode** — single slice::
+**2.5D mode**: single slice::
 
     denoise slice --config baseline_config.yaml --slice-number 500
 
-**2.5D mode** — full volume::
+**2.5D mode**: full volume::
 
     denoise volume --config baseline_config.yaml
 
-**3D mode** — full volume (``slice`` is not supported in 3D mode)::
+**3D mode**: full volume (``slice`` is not supported in 3D mode)::
 
     denoise volume --config baseline_config.yaml --mode 3d
 

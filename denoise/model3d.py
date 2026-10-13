@@ -451,7 +451,7 @@ class UNet(nn.Module):
 
     @torch.jit.unused
     def forward_gradcp(self, x):
-        """Forward pass with gradient checkpointing (saves ~20-50% memory)."""
+        """Run a forward pass with gradient checkpointing to reduce activation memory."""
         encoder_outs = []
         for module in self.down_convs:
             x, before_pool = checkpoint(module, x)
@@ -473,27 +473,11 @@ def unet3d(
     normalization: str = 'layer',
     activation: str = 'relu',
 ) -> UNet:
-    """
-    Factory function matching the configuration used in Laugros et al. 2025.
+    """Construct the volumetric U-Net used for 3D denoising.
 
-    Input/output shape: [B, 1, D, H, W]
-    D, H, W must each be divisible by 2**n_blocks (e.g. 64 for n_blocks=3).
-
-    Parameters
-    ----------
-    in_channels : int
-        Number of input channels (1 for single-channel volumes).
-    out_channels : int
-        Number of output channels (1 for denoising).
-    n_blocks : int
-        Encoder depth. Controls receptive field and GPU memory use.
-        Default 3 is a good balance; use 4 for deeper context (needs more memory).
-    start_filts : int
-        Filter count of the first encoder block. Subsequent blocks double this.
-    normalization : str
-        Normalisation type: 'layer', 'group', 'instance', 'batch', or 'none'.
-    activation : str
-        Activation function: 'relu', 'leaky', 'silu', etc.
+    Input and output are [B, channels, D, H, W]. Spatial dimensions must be
+    divisible by 2**n_blocks. Encoder widths start at start_filts and double
+    at each level. normalization and activation select the block operations.
     """
     return UNet(
         in_channels=in_channels,

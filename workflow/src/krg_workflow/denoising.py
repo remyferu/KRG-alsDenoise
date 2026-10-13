@@ -1,7 +1,4 @@
-"""Denoising helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Training configuration, checkpoint and denoised-volume validation."""
 from pathlib import Path
 import numpy as np
 import tifffile

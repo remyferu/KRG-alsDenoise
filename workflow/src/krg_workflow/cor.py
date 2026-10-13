@@ -1,7 +1,4 @@
-"""Cor helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""TomoPy Vo centering and projection alignment in midpoint-offset coordinates."""
 from pathlib import Path
 from scipy.ndimage import shift as image_shift
 from skimage.registration import phase_cross_correlation

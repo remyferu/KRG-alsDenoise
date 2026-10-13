@@ -1,7 +1,4 @@
-"""Cleanup helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Cleanup manifests, protected paths and confirmed output deletion."""
 from pathlib import Path
 import stat
 import uuid

@@ -11,28 +11,21 @@ def natural_sorted(l):
     return sorted(l, key=key)
 
 
-# We use the following function to load a stack of images:
 def load_stack(paths, binning=1, use_tqdm=True):
-    """Load a stack of tiff files.
+    """Load TIFFs as [slice, row, column] and return the stack, mean and std.
 
-    :param paths: paths to tiff files
-    :param binning: whether angles and projection images should be binned.
-    :returns: an np.array containing the values in the tiff files
-    :rtype: np.array
-
+    binning subsamples each spatial axis by the given stride. Nonfinite values
+    are replaced before computing statistics.
     """
-    # Read first image for shape and dtype information
 
     img0 = tifffile.imread(str(paths[0]))
     img0 = img0[::binning, ::binning]
     dtype = img0.dtype
-    # Create empty numpy array to hold result
     imgs = np.empty((len(paths), *img0.shape), dtype=dtype)
 
     progress = tqdm if use_tqdm else lambda x: x
 
-    # data is normalized to have zero mean, unit variance
-    # faster to calculate mean/var in a streaming fashion
+    # Compute normalization statistics during loading to avoid a second full-volume pass.
     total_sum = 0.0
     total_sq  = 0.0
     total_n   = 0
@@ -52,13 +45,7 @@ def load_stack(paths, binning=1, use_tqdm=True):
     return imgs, mean, std
 
 def glob(dir_path):
-    """Expand path to list of all tiffs in directory
-
-    :param dir_path: directory
-    :returns:
-    :rtype:
-
-    """
+    """List TIFF paths in natural filename order."""
     dir_path = Path(dir_path).expanduser().resolve()
     return natural_sorted(dir_path.glob("*.tif*"))
 
@@ -72,28 +59,16 @@ def save_stack(path, stack, offset=0, exist_ok=True, parents=False):
 
 
 def load_sino(paths, binning=1, dtype=None, flip_y=False):
-    """Load a stack of tiff files into a sinogram
-
-    :param paths: paths to tiff files
-    :param binning: whether angles and projection images should be binned.
-    :returns: an np.array containing the values in the tiff files
-    :rtype: np.array
-
-    """
-    # Read first image for shape and dtype information
+    """Load TIFFs as [row, angle, column], with optional vertical reversal."""
     paths = list(paths)
-    #print(paths[0])
-    #sys.exit()
     img0 = tifffile.imread(str(paths[0]))
     img0 = img0[::binning, ::binning]
     if dtype is None:
         dtype = img0.dtype
-    # Create empty numpy array to hold result
     imgs = np.empty((img0.shape[0], len(paths), img0.shape[1]), dtype=dtype)
     for i, p in tqdm(enumerate(paths)):
         # Angles in the middle, "up" in front, "right" at the back.
         if flip_y:
-            # Flip in the vertical direction
             imgs[:, i, :] = tifffile.imread(str(p))[::-binning, ::binning]
         else:
             imgs[:, i, :] = tifffile.imread(str(p))[::binning, ::binning]

@@ -16,7 +16,7 @@ predict one from the other, removing noise without any clean reference images.
 .. warning::
 
    A single full-angle reconstruction is **not sufficient** to run denoise.
-   You must create the two sub-reconstructions from the raw projection data
+   Create the two sub-reconstructions from the raw projection data
    before proceeding.
 
 Choosing a convolution mode
@@ -32,17 +32,16 @@ All ``denoise`` commands that touch the model accept a ``--mode`` flag:
      - Description
      - Typical use
    * - ``2.5d`` *(default)*
-     - 2D U-Net; stacks N adjacent slices as channels.
+     - 2D U-Net with N adjacent slices as channels.
        Fast and memory-efficient.
      - General synchrotron CT
    * - ``3d``
-     - Full 3D U-Net with skip connections; operates on cubic sub-volumes.
+     - Full 3D U-Net with skip connections, processing cubic patches.
        Removes structured 3D noise and ring artifacts.
      - Coherent X-ray / XNH microscopy
 
 The mode is **saved into the YAML config** at the start of training, so
-you do not need to repeat ``--mode`` at inference time — the config already
-knows which model type was used.  You can always override by passing
+inference reads the saved mode from the config. Override it with
 ``--mode`` explicitly.
 
 .. note::
@@ -54,7 +53,7 @@ denoise prepare
 ---------------
 
 Run ``denoise prepare`` (in the ``denoise`` environment) to write the
-config YAML and print the two ``tomocupy recon_steps`` commands you need
+config YAML and print the two ``tomocupy recon_steps`` commands required
 to run next::
 
     (denoise) $ denoise prepare --file-name /data/sample.h5
@@ -65,7 +64,7 @@ commands with the correct ``--out-path-name`` values.
 
 .. note::
 
-   ``denoise prepare`` writes the config YAML only — it does **not** create
+   ``denoise prepare`` writes the config YAML only; it does **not** create
    the sub-reconstruction directories.  Due to a NumPy compatibility issue
    between the ``denoise`` and ``tomocupy`` environments, the two
    sub-reconstructions must be created by running the printed commands
@@ -109,8 +108,8 @@ This produces::
 .. note::
    **Non-tomocupy or non-APS HDF5 data**
 
-   If your raw data is not in the standard APS HDF5 format, or you prefer a
-   reconstruction tool other than tomocupy, you can create the two
+   For raw data outside the standard APS HDF5 format, or reconstruction tools
+   other than tomocupy, create the two
    sub-reconstructions with any tool and write the config file by hand.
 
    **Using tomopy / dxchange** (for arbitrary data formats):
@@ -140,11 +139,11 @@ This produces::
        (denoise) $ cp /path/to/Noise2Inverse360/baseline_config.yaml \
                   /path/to/sample_rec_config.yaml
 
-   and setting the four path fields to match your directories.
+   and setting the four path fields to match the reconstruction directories.
 
    The ``metadata:`` block (used by the model registry for matching) will
-   not be present in a manually created config.  You can add it by hand or
-   leave it empty — training will proceed normally either way.
+   not be present in a manually created config.  Add it manually or
+   leave it empty; training will proceed normally either way.
 
    **Practical example** (APS 2-BM, February 2026 Chawla dataset)::
 
@@ -192,7 +191,7 @@ denoise train
 -------------
 
 Train the Noise2Inverse model. ``denoise train`` automatically launches
-``torchrun`` with the correct settings — no manual ``torchrun`` invocation
+``torchrun`` with the correct settings; no manual ``torchrun`` invocation
 is required.
 
 .. note::
@@ -202,9 +201,9 @@ is required.
 
 Before launching training, ``denoise train`` automatically searches the local
 model registry for a model trained under the same instrument conditions and
-prompts you with the result.
+displays matching registry entries and prompts for confirmation.
 
-**Case 1 — a compatible model already exists:**
+**Case 1: a compatible model already exists**
 
 .. code-block:: text
 
@@ -232,7 +231,7 @@ prompts you with the result.
 Press **Enter** (or **N**) to cancel and reuse the existing model.
 Enter **y** to proceed with a new training run.
 
-**Case 2 — no compatible model found:**
+**Case 2: no compatible model found**
 
 .. code-block:: text
 
@@ -254,15 +253,15 @@ To skip the registry search entirely, add ``--no-search``::
 Running multiple training jobs on the same node
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``torchrun`` binds to port ``29500`` by default.  If you launch a second
+``torchrun`` binds to port ``29500`` by default.  For a second
 training job on the same machine (e.g. two datasets on a 4-GPU node),
 the second job will fail with ``EADDRINUSE``.  Use ``--master-port`` to
 assign a different port to each job::
 
-    # job 1 — GPUs 0,1, default port
+    # Job 1: GPUs 0,1, default port
     (denoise) $ denoise train --config /data/delta_config.yaml --gpus 0,1 --no-search
 
-    # job 2 — GPUs 2,3, different port
+    # Job 2: GPUs 2,3, different port
     (denoise) $ denoise train --config /data/beta_config.yaml --gpus 2,3 --no-search --master-port 29501
 
 ``--master-port`` only needs to be set for the second (and subsequent)
@@ -276,7 +275,7 @@ For single-GPU training::
 
     (denoise) $ denoise train --config /data/sample_rec_config.yaml --gpus 0
 
-Any number of GPUs can be used — just list all the IDs. For example, on a
+List the allocated GPU identifiers in ``--gpus``. For example, on a
 4-GPU machine::
 
     (denoise) $ denoise train --config /data/sample_rec_config.yaml --gpus 0,1,2,3
@@ -298,8 +297,8 @@ Progress is logged to ``~/logs/denoise_<timestamp>.log`` and printed to the cons
 with colour-coded levels. Training output (checkpoints, loss curves) is saved to
 ``<directory_to_reconstructions>/TrainOutput/``.
 
-Three checkpoints are saved independently during training — each updated
-in-place whenever a new best is found:
+Three checkpoints are saved independently during training. Each is updated
+when its selection criterion improves:
 
 .. list-table::
    :header-rows: 1
@@ -324,69 +323,24 @@ in-place whenever a new best is found:
    checkpoints reflect the best values seen up to that point and are fully
    usable for inference. For example, training killed at epoch 1710/2000
    produced ``best_val_model.pth`` at epoch 1705 (val loss 0.053) and
-   ``best_edge_model.pth`` at epoch 1650 — both suitable for inference.
+   ``best_edge_model.pth`` at epoch 1650; both suitable for inference.
 
-What the model learns
----------------------
-
-The Noise2Inverse model learns the **noise statistics of the imaging system**,
-not anything about the sample itself.  The model is fully **sample-independent**
-and can be reused across datasets as long as the acquisition conditions remain
-the same.
-
-The network characterises:
-
-* Detector read noise and dark current
-* Shot noise at the specific photon flux (energy × exposure × beam current)
-* Scintillator glow and afterglow patterns
-* Ring artifact signatures from detector pixel non-uniformity
-* Any systematic noise from the lens and optic combination
-
-What does **not** affect reusability:
-
-* Sample composition, density, or size
-* Rotation axis position
-* Number of projections (within reason)
-* Binning (as long as ``psz`` in the config matches the binned pixel size)
-
-When to reuse vs. retrain
---------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 50 25 25
-
-   * - Condition
-     - Reuse model?
-     - Action
-   * - Same beamline, same detector, same energy, same exposure
-     - **Yes**
-     - Use registry model directly
-   * - Same setup, different sample
-     - **Yes**
-     - Use registry model directly
-   * - Same setup, different binning
-     - **Yes** (if ``psz`` adjusted)
-     - Update ``psz`` in config
-   * - Same setup, slightly different exposure (±20%)
-     - **Likely yes**
-     - Try inference; retrain if quality is poor
-   * - Different energy or significantly different flux
-     - **No**
-     - Retrain on new sub-reconstructions
-   * - Different detector or scintillator
-     - **No**
-     - Retrain on new sub-reconstructions
-   * - Different beamline
-     - **No**
-     - Retrain on new sub-reconstructions
-
-Fine-tuning a pre-trained model
+Model reuse
++-----------
++
++Registry matching compares acquisition metadata; it does not measure denoising
++quality on a new scan. Assess registered models on representative slices and
++inspect residuals before reuse. Changes in sample structure, reconstruction
++settings or acquisition conditions can affect results even when metadata match.
++Architecture, slice count and normalization must remain compatible with the
++checkpoint. Fine-tuning or fresh training provides a separate comparison.
++
++Fine-tuning a pre-trained model
 --------------------------------
 
-Instead of training from scratch, you can initialise the network with weights
+Initialize the network with weights
 from a previously trained model and continue training on a new dataset.  This
-is useful when acquisition conditions are similar but not identical — fine-tuning
+is useful when acquisition conditions are similar but not identical; fine-tuning
 for a fraction of the original epochs may be sufficient:
 
 .. code-block:: bash
@@ -405,7 +359,7 @@ for a fraction of the original epochs may be sufficient:
                     --finetune /data/brain_beta/TrainOutput/best_val_model.pth \
                     --no-search
 
-``--finetune`` loads **model weights only** — all training state (epoch,
+``--finetune`` loads **model weights only**; all training state (epoch,
 loss history, best values) resets from scratch.  When a registry directory is
 given, ``best_val_model.pth`` is used automatically.
 
@@ -431,13 +385,13 @@ at any point.
 .. note::
 
    ``resume.pth`` is overwritten at the end of every epoch.  It is safe to
-   run ``denoise slice`` or ``denoise volume`` while training is in progress —
+   run ``denoise slice`` or ``denoise volume`` while training is in progress;
    the inference commands load the *best* checkpoints, not ``resume.pth``.
 
 .. warning::
 
    Do **not** use ``--resume`` after changing the config (e.g. ``psz``,
-   ``n_slices``).  You may safely increase ``maxep`` to extend training beyond
+   ``n_slices``).  Increase ``maxep`` to extend training beyond
    the original limit.
 
 Reducing training slices with z_stride
@@ -457,7 +411,7 @@ load only every Nth slice.  This works in **both 2.5D and 3D modes**.
       lr: 0.001
       warmup: 2000
       maxep: 2000
-      z_stride: 5   # use every 5th slice — 5× less RAM and 5× faster load
+      z_stride: 5   # Load every fifth slice to reduce host memory
 
 ``z_stride: 1`` (the default) loads every slice.  A value of 5 is a good
 starting point for brain-sized datasets (~2000 slices): it retains full
@@ -465,13 +419,13 @@ anatomical coverage while reducing load time and memory by ~5×.
 
 The ``warmup`` threshold is automatically divided by ``z_stride`` so that the
 number of warmup model updates stays proportional to the effective dataset size
-— no manual adjustment needed.
+without further adjustment.
 
-.. admonition:: 3D mode — RAM impact
+.. admonition:: 3D host memory
 
    In 3D mode each DDP rank loads the **entire volume** independently, so RAM
-   scales as ``world_size × dataset_size``.  ``z_stride`` is especially
-   important here.  For a 1852-slice volume with two GPUs:
+   scales as ``world_size × dataset_size``. Subsampling with ``z_stride``
+   reduces the loaded depth. For a 1852-slice volume with two GPUs:
 
    .. list-table::
       :header-rows: 1
@@ -498,12 +452,12 @@ number of warmup model updates stays proportional to the effective dataset size
         - ~86 GB
         - ~90 s
 
-   The maximum useful ``z_stride`` is ``floor(D / psz_3d)`` — you must
-   load at least ``psz_3d`` slices to draw a cubic training patch.
+   The maximum useful ``z_stride`` is ``floor(D / psz_3d)``. Drawing a
+   cubic training patch requires at least ``psz_3d`` loaded slices.
 
 .. note::
 
-   Do **not** use ``--resume`` after changing ``z_stride`` in the config —
+   Do **not** use ``--resume`` after changing ``z_stride`` in the config;
    the dataset size changes, which affects the epoch/update relationship.
 
 Early stopping
@@ -562,13 +516,13 @@ both 2.5D and 3D fields so no manual editing is required):
 
     train:
       psz: 256          # 2.5D patch size (ignored in 3D mode)
-      psz_3d: 96        # 3D cubic patch size — must be divisible by 2**n_blocks_3d
+      psz_3d: 96        # 3D cubic patch size; must be divisible by 2**n_blocks_3d
       n_slices: 5       # 2.5D stack depth (ignored in 3D mode)
       nb_patches_3d: 17600  # number of random 3D patches per epoch
       n_blocks_3d: 4    # U-Net encoder depth (matches SSD_3D reference)
       start_filts_3d: 56  # filter count of first encoder block
-      mbsz: 4           # batch size — 3D patches are large; use 2–8 per GPU
-      z_stride: 10      # load every 10th slice — critical for large volumes
+      mbsz: 4           # Per-GPU batch; check activation memory
+      z_stride: 10      # Load every tenth slice
       lr: 0.001
       warmup: 2000
       maxep: 2000
@@ -583,12 +537,13 @@ Key differences from 2.5D config:
 
 * ``psz_3d`` replaces ``psz`` for 3D patch size.  Must be divisible by
   ``2**n_blocks_3d`` (e.g. 96 for 4 blocks since 96 / 16 = 6).
-* ``mbsz`` should be much smaller than in 2.5D — a 96³ patch at fp32 is ~3.4 MB,
-  so 4–8 fit comfortably on a 40 GB GPU alongside the model.
+* ``mbsz`` should be much smaller than in 2.5D; a 96³ float32 input patch is about
+  3.4 MB, but network activations require additional VRAM. Select batch size
+  from measured memory use for the architecture and precision.
 * ``nb_patches_3d`` sets how many random cubic patches are sampled per epoch.
   17600 matches the SSD_3D reference; reduce for quick experiments or smaller
   volumes.
-* ``z_stride`` is especially important in 3D mode — each rank loads the full
+* Each 3D rank loads the full
   volume independently, so RAM scales as ``world_size × dataset_size``.
   Use ``z_stride: 10`` as a starting point for large volumes (>1000 slices).
 
@@ -615,7 +570,7 @@ denoise slice (2.5D only)
 
    ``denoise slice`` can be run while training is still in progress.
    The model checkpoints in ``TrainOutput/`` are updated in-place whenever a
-   new best is found, so you can check denoising quality at any point without
+   selection criterion improves, allowing denoising inspection without
    waiting for training to finish.
 
 Denoise a single CT slice::
@@ -664,7 +619,7 @@ denoise volume
 
 Denoise the entire CT volume::
 
-    # 2.5D (default — or when mode is already stored in the config YAML)
+    # 2.5D (default or saved mode)
     (denoise) $ denoise volume --config /data/sample_rec_config.yaml
 
     # 3D
@@ -709,7 +664,7 @@ without overwriting each other.
    :width: 100%
    :align: center
 
-   Left: denoised — Right: noisy reconstruction (brain CT, APS 2-BM)
+   Left: denoised. Right: noisy reconstruction (brain CT, APS 2-BM)
 
 Performance example
 ^^^^^^^^^^^^^^^^^^^
@@ -720,9 +675,8 @@ The table below shows measured wall-clock times for a real APS 2-BM dataset:
 * **Training hardware**: 2× NVIDIA V100 32 GB
 * **Inference hardware**: 1× NVIDIA A100 80 GB (batch size 512, auto-selected)
 
-Two inference runs are shown — one with ``--checkpoint lcl`` (default) and one
-with ``--checkpoint val`` — to illustrate that checkpoint choice does not affect
-throughput: the model architecture is identical, only the weights differ.
+The table compares ``--checkpoint lcl`` and ``--checkpoint val`` inference
+with the same architecture and different weights.
 
 .. list-table::
    :header-rows: 1
@@ -733,7 +687,7 @@ throughput: the model architecture is identical, only the weights differ.
      - ``--checkpoint val``
    * - Training (1710/2000 epochs, killed by SIGKILL at ~85%)
      - 42 h 23 min
-     - —
+     - Not applicable
    * - Load + normalize TIFFs into RAM
      - 5 min 59 s
      - 4 min 23 s
@@ -755,7 +709,7 @@ throughput: the model architecture is identical, only the weights differ.
 
 GPU inference (~41 min, 60–62% of total) is stable across runs. Loading
 variation reflects OS disk-cache state. Stitching variation (~11–17 min) is
-due to system memory pressure. Training time dwarfs inference by ~38×; using
+due to system memory pressure. Training took about 38 times as long as inference in this example; using
 4 GPUs would reduce training to roughly 10–12 hours.
 
 Model Registry
@@ -769,7 +723,7 @@ over GPFS, a model registered on tocai is immediately available on tomo4.
 
 .. note::
 
-   The registry lives entirely in your home directory and is **never** tracked
+   The registry lives entirely in the account home directory and is **never** tracked
    by git.
 
 Instrument metadata in the config
@@ -879,7 +833,7 @@ Example output::
 Using a registered model for inference
 ----------------------------------------
 
-When ``denoise train`` finds a matching model and you cancel training, create a
+When ``denoise train`` finds a matching model and training is cancelled, create a
 new config for the new dataset (via ``denoise prepare``) and add the
 normalisation statistics from the registered model's ``config.yaml``::
 
@@ -900,7 +854,7 @@ Then run inference directly::
 .. note::
 
    ``mean4norm`` and ``std4norm`` are written by the training script and handle
-   intensity normalisation.  They must match the values used during training —
+   intensity normalisation.  They must match the values used during training;
    copy them from the registered model's ``config.yaml``.
 
 Command Reference

@@ -1,7 +1,4 @@
-"""Notebook ui helpers extracted from the v3.3 CT workflow.
-
-No notebook cell execution or training occurs on import.
-"""
+"""Linked image viewers, manual COR controls and live log displays."""
 try:
     from IPython.display import display
 except ImportError:
@@ -40,7 +37,7 @@ def image_zoom_bounds(shape, zoom=1.0, center=None):
 
 
 def image_display_limits(image):
-    """Choose a robust full-image window once, rather than renormalizing each crop."""
+    """Set a full-image contrast window that remains fixed across crops."""
     finite = np.asarray(image)[np.isfinite(image)]
     if not finite.size:
         raise ValueError('The image contains no finite pixels.')
