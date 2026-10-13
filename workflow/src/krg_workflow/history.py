@@ -202,7 +202,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
         has_total = any(np.isfinite(values[key]).any() for key in ('train_total', 'eval_total'))
         has_lr = np.isfinite(values['learning_rate']).any()
         panels = 2 + 2 * int(has_reference) + int(has_total) + int(has_lr)
-        fig, axes = plt.subplots(panels, 1, figsize=(12, 8.8 + 3.1 * (panels - 2)), sharex=True)
+        fig, axes = plt.subplots(panels, 1, figsize=(14, 8.8 + 3.1 * (panels - 2)), sharex=True)
         try:
             fig.patch.set_facecolor('white')
             mode = metadata['mode'] or 'CT'
@@ -215,7 +215,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
             if reason:
                 subtitle += f" · {reason} after epoch {rows[-1]['epoch']}"
             fig.text(0.08, 0.936, subtitle, fontsize=12, color='#596b7d')
-            colors = {'Training': '#2166ac', 'Evaluation': '#d26026'}
+            colors = {'Training': '#2166ac', 'Evaluation': '#d26026', 'EMA': '#7953a6'}
             specifications = [(axes[0], 'train_l1', 'eval_l1', 'L1 loss', 'Epoch-average L1 loss', best_l1), (axes[1], 'train_lcl', 'eval_lcl', 'Local contrast loss (LCL)', 'Epoch-average weighted LCL loss', best_lcl)]
             if has_reference:
                 specifications.extend([(axes[2], 'train_l2', 'eval_l2', 'L2 / MSE (reference only)', 'Epoch-average paired MSE', None), (axes[3], 'train_ssim', 'eval_ssim', 'SSIM loss (reference only)', 'Epoch-average paired 1 - SSIM', None)])
@@ -242,16 +242,15 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                     mark_records(ax, 'early_stop_mean', '#243447')
                 if eval_key == 'eval_total' and np.isfinite(values['ema_total']).any():
                     available = np.isfinite(values['ema_total'])
-                    ax.plot(epochs[available], positive(values['ema_total'][available]), color='#7953a6',
-                            linewidth=1.7, label='EMA weights (raw evaluation)', zorder=4)
-                    mark_records(ax, 'ema_total', '#7953a6')
+                    ax.plot(epochs[available], positive(values['ema_total'][available]), color=colors['EMA'],
+                            linewidth=2.2, marker=None, label='EMA weights (raw evaluation)', zorder=7)
                 ax.set_title(title, loc='left', fontweight='bold', fontsize=14, pad=12)
                 ax.set_ylabel(ylabel)
                 plotted_keys = (train_key, eval_key, 'early_stop_mean', 'ema_total') if eval_key == 'eval_total' else (train_key, eval_key)
                 if not any(np.isfinite(positive(values[key])).any() for key in plotted_keys):
                     ax.set_ylim(1e-8, 1)
-                    ax.text(.5, .5, 'No positive loss values', transform=ax.transAxes,
-                            ha='center', color='#687889', fontsize=10)
+                    ax.text(1.025, .15, 'No positive loss values', transform=ax.transAxes,
+                            va='top', color='#687889', fontsize=10)
                 ax.set_xscale('linear')
                 ax.xaxis.set_major_locator(MaxNLocator(integer=True))
                 ax.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -260,18 +259,19 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                 ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=0.4)
                 ax.set_xlim(epochs[0] - .5, epochs[-1] + .5)
                 ax.tick_params(axis='both', length=0, pad=7)
-                ax.legend(loc='upper right', frameon=False, ncol=2)
+                ax.legend(loc='upper left', bbox_to_anchor=(1.025, 1),
+                          borderaxespad=0, frameon=False, ncol=1)
                 if best is not None:
-                    label = 'Lowest post-warmup evaluation L1' if train_key == 'train_l1' else 'Lowest post-warmup evaluation LCL'
-                    note = f"{label}: {best['value']:.6f}\nEpoch {best['epoch']}"
-                    position = (0.03, 0.06)
+                    label = 'Lowest evaluation L1' if train_key == 'train_l1' else 'Lowest evaluation LCL'
+                    note = f"{label}\nAfter warmup: {best['value']:.6f}\nEpoch {best['epoch']}"
                     box = dict(boxstyle='round,pad=.5', facecolor='white', edgecolor='#e4e8ed')
-                    if best['value'] > 0:
-                        ax.annotate(note, xy=(best['epoch'], best['value']), xytext=position, textcoords='axes fraction', fontsize=10, bbox=box, zorder=8, arrowprops=dict(arrowstyle='-', color='#a7b2be', linewidth=1))
-                    else:
-                        ax.text(*position, note + ' (outside log loss axis)', transform=ax.transAxes, fontsize=10, bbox=box, zorder=8)
+                    if best['value'] <= 0:
+                        note += '\nNonpositive; omitted'
+                    ax.text(1.025, .58, note, transform=ax.transAxes, fontsize=10,
+                            va='top', bbox=box, zorder=8)
             if metadata['warmup_end'] is not None:
-                axes[0].text(metadata['warmup_end'] + 5, 0.88, 'LCL warmup ended', transform=axes[0].get_xaxis_transform(), fontsize=9, color='#687889')
+                axes[0].text(1.025, .15, 'Warmup ended\nEpoch {}'.format(metadata['warmup_end']),
+                             transform=axes[0].transAxes, va='top', fontsize=9, color='#687889')
             if has_lr:
                 ax = axes[-1]
                 available = np.isfinite(values['learning_rate'])
@@ -282,7 +282,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                 ax.grid(which='major', axis='both', color='#dce3ea', linewidth=.7)
                 ax.grid(which='minor', axis='both', color='#e8edf2', linewidth=.4)
             axes[-1].set_xlabel('Epoch', labelpad=10)
-            record_note = ('Dots: successive record lows after warmup.'
+            record_note = ('Dots: successive record lows after warmup; EMA is line-only.'
                            if any(row['warmup_epoch'] is not None for row in rows) else
                            'Warmup status unavailable; record-low markers omitted.')
             fig.text(0.08, 0.073, record_note+' Log loss axes omit nonpositive values.', fontsize=10, color='#596b7d')
@@ -296,7 +296,7 @@ def plot_training_history(log_path, output_dir=None, moving_window=10, show=True
                      if metadata['metric_scope'] == 'all_ranks' else
                      'Evaluation resamples training data; metrics represent the final GPU rank.')
             fig.text(0.08, 0.021, basis+' LCL uses its logged weight; L2/SSIM are reference metrics.', fontsize=9, color='#596b7d')
-            fig.subplots_adjust(left=0.105, right=0.97, top=0.87, bottom=0.12, hspace=0.31)
+            fig.subplots_adjust(left=0.09, right=0.72, top=0.87, bottom=0.12, hspace=0.31)
             for extension in ('png', 'svg'):
                 temp = folder / ('.training_loss_history.' + uuid.uuid4().hex + '.tmp')
                 try:

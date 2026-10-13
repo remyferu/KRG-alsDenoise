@@ -9,6 +9,7 @@ from unittest.mock import patch
 import warnings
 
 import numpy as np
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'workflow/src'))
@@ -94,6 +95,9 @@ class HistoryPlottingTests(unittest.TestCase):
             with patch.object(history.plt, 'close', side_effect=capture), contextlib.redirect_stdout(io.StringIO()):
                 result = history.plot_training_history(path, Path(temporary)/'plots', moving_window=3, show=False)
             self.assertEqual(len(figures), 1)
+            canvas = FigureCanvasAgg(figures[0])
+            canvas.draw()
+            renderer = canvas.get_renderer()
             axes = figures[0].axes
             self.assertEqual(len(axes), 6)
             for ax in axes:
@@ -103,14 +107,26 @@ class HistoryPlottingTests(unittest.TestCase):
                 for axis in (ax.xaxis, ax.yaxis):
                     self.assertTrue(all(t.gridline.get_visible() for t in axis.get_major_ticks()))
                     self.assertTrue(all(t.gridline.get_visible() for t in axis.get_minor_ticks()))
+                legend = ax.get_legend()
+                if legend is not None:
+                    bounds = legend.get_window_extent(renderer)
+                    self.assertGreaterEqual(bounds.x0, ax.bbox.x1)
+                    self.assertLessEqual(bounds.x1, figures[0].bbox.x1)
+                for label in ax.texts:
+                    self.assertGreater(label.get_position()[0], 1)
             for ax, keys in zip(axes[:5], [('train_l1', 'eval_l1'), ('train_lcl', 'eval_lcl'),
                                          ('train_l2', 'eval_l2'), ('train_ssim', 'eval_ssim'),
-                                         ('train_total', 'eval_total', 'early_stop_mean', 'ema_total')]):
+                                         ('train_total', 'eval_total', 'early_stop_mean')]):
                 self.assertEqual(len(ax.collections), len(keys))
                 for scatter, key in zip(ax.collections, keys):
                     points = result['record_lows'][key]
                     self.assertEqual([p['epoch'] for p in points], [4, 5, 8])
                     np.testing.assert_allclose(scatter.get_offsets(), [[p['epoch'], p['value']] for p in points])
+            total_lines = {line.get_label(): line for line in axes[4].lines}
+            ema = total_lines['EMA weights (raw evaluation)']
+            self.assertIn(ema.get_marker(), (None, 'None', ''))
+            self.assertNotEqual(ema.get_color(), total_lines['Training'].get_color())
+            self.assertNotEqual(ema.get_color(), total_lines['Evaluation'].get_color())
             self.assertTrue(Path(result['paths']['png']).is_file())
             self.assertTrue(Path(result['paths']['svg']).is_file())
 

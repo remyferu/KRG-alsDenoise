@@ -227,8 +227,10 @@ the raw EMA values, learning rate and reduction flag for each epoch.
 
 History plots use a linear epoch axis and logarithmic loss axes, with major and minor gridlines.
 Dots mark each strict record low in the raw training and evaluation losses,
-tracked separately after warmup. EMA and the logged stopping monitor have their
-own record-low points. Display smoothing does not affect these markers.
+tracked separately after warmup. The logged stopping monitor has its own
+record-low points; EMA is a distinct purple line without point markers.
+Legends, lowest-loss summaries and warmup labels sit outside the plotting area.
+Display smoothing does not affect the record-low markers.
 Epochs containing any warmup updates are excluded, including the transition
 epoch. New logs record this explicitly; older logs use their warmup and monitor
 status. Without warmup status, record-low markers are omitted. Nonpositive
